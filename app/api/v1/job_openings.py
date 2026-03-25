@@ -9,6 +9,7 @@ from app.core.security import AdminPrincipal
 from app.schemas.job_opening import (
     JobOpeningCreatePayload,
     JobOpeningListResponse,
+    JobOpeningPausePayload,
     JobOpeningRecord,
 )
 from app.services.job_opening_service import JobOpeningService
@@ -58,3 +59,21 @@ async def delete_job_opening(
             detail="Job opening not found.",
         )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/job-openings/{job_opening_id}/pause", response_model=JobOpeningRecord)
+async def pause_job_opening(
+    job_opening_id: UUID,
+    payload: JobOpeningPausePayload,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: JobOpeningService = Depends(get_job_opening_service_dep),
+) -> JobOpeningRecord:
+    """Pause or resume one job opening."""
+
+    updated = await service.set_paused(str(job_opening_id), payload.paused)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job opening not found.",
+        )
+    return updated

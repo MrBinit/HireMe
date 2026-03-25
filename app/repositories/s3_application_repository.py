@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from app.core.runtime_config import S3StorageRuntimeConfig
@@ -70,6 +72,10 @@ class S3ApplicationRepository(ApplicationRepository):
         offset: int,
         limit: int,
         job_opening_id: UUID | None = None,
+        role_selection: str | None = None,
+        applicant_status: ApplicantStatus | None = None,
+        submitted_from: datetime | None = None,
+        submitted_to: datetime | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """List application records persisted in S3."""
 
@@ -79,8 +85,20 @@ class S3ApplicationRepository(ApplicationRepository):
         for key in keys:
             payload = await self._store.get_json(key)
             record = ApplicationRecord.model_validate(payload)
-            if job_opening_id is None or record.job_opening_id == job_opening_id:
-                records.append(record)
+            if job_opening_id is not None and record.job_opening_id != job_opening_id:
+                continue
+            if (
+                role_selection is not None
+                and record.role_selection.strip().casefold() != role_selection.strip().casefold()
+            ):
+                continue
+            if applicant_status is not None and record.applicant_status != applicant_status:
+                continue
+            if submitted_from is not None and record.created_at < submitted_from:
+                continue
+            if submitted_to is not None and record.created_at > submitted_to:
+                continue
+            records.append(record)
         records.sort(key=lambda item: item.created_at, reverse=True)
         total = len(records)
         return records[offset : offset + limit], total
@@ -146,13 +164,56 @@ class S3ApplicationRepository(ApplicationRepository):
         *,
         application_id: UUID,
         applicant_status: ApplicantStatus,
+        note: str | None = None,
     ) -> bool:
         """Update applicant lifecycle status for one S3-backed record."""
+
+        return await self.update_admin_review(
+            application_id=application_id,
+            updates={"applicant_status": applicant_status, "note": note},
+        )
+
+    async def update_admin_review(
+        self,
+        *,
+        application_id: UUID,
+        updates: dict[str, Any],
+    ) -> bool:
+        """Update admin-review fields on one S3-backed record."""
 
         record = await self.get_by_id(application_id)
         if record is None:
             return False
-        updated = record.model_copy(update={"applicant_status": applicant_status})
+
+        update_payload: dict[str, Any] = {}
+        if "applicant_status" in updates and updates["applicant_status"] is not None:
+            update_payload["applicant_status"] = updates["applicant_status"]
+        if "ai_score" in updates:
+            update_payload["ai_score"] = updates["ai_score"]
+        if "ai_screening_summary" in updates:
+            update_payload["ai_screening_summary"] = updates["ai_screening_summary"]
+        if "online_research_summary" in updates:
+            update_payload["online_research_summary"] = updates["online_research_summary"]
+
+        note = updates.get("note")
+        if "applicant_status" in updates and updates["applicant_status"] is not None or note:
+            history = list(record.status_history or [])
+            history.append(
+                {
+                    "status": update_payload.get("applicant_status", record.applicant_status),
+                    "note": note,
+                    "changed_at": datetime.now(tz=timezone.utc)
+                    .isoformat()
+                    .replace(
+                        "+00:00",
+                        "Z",
+                    ),
+                    "source": "admin",
+                }
+            )
+            update_payload["status_history"] = history
+
+        updated = record.model_copy(update=update_payload)
         await self._store.put_json(
             self._application_key(application_id),
             updated.model_dump(mode="json"),

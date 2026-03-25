@@ -1,5 +1,6 @@
 """API routes for admin authentication and candidate management."""
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,7 +12,9 @@ from app.api.deps import (
 )
 from app.core.security import AdminPrincipal
 from app.schemas.application import (
+    AdminCandidateReviewPayload,
     ApplicantStatusUpdatePayload,
+    ApplicantStatus,
     ApplicationListResponse,
     ApplicationRecord,
 )
@@ -56,6 +59,10 @@ async def list_candidates(
     offset: int = Query(default=0, ge=0),
     limit: int | None = Query(default=None, ge=1),
     job_opening_id: UUID | None = Query(default=None),
+    role_selection: str | None = Query(default=None),
+    applicant_status: ApplicantStatus | None = Query(default=None),
+    submitted_from: datetime | None = Query(default=None),
+    submitted_to: datetime | None = Query(default=None),
     _: AdminPrincipal = Depends(get_admin_principal),
     service: ApplicationService = Depends(get_application_service_dep),
 ) -> ApplicationListResponse:
@@ -65,6 +72,10 @@ async def list_candidates(
         offset=offset,
         limit=limit,
         job_opening_id=job_opening_id,
+        role_selection=role_selection,
+        applicant_status=applicant_status,
+        submitted_from=submitted_from,
+        submitted_to=submitted_to,
     )
 
 
@@ -100,6 +111,37 @@ async def update_candidate_status(
     updated = await service.update_applicant_status(
         application_id=application_id,
         applicant_status=payload.applicant_status,
+        note=payload.note,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return updated
+
+
+@router.patch(
+    "/admin/candidates/{application_id}/review",
+    response_model=ApplicationRecord,
+)
+async def update_candidate_review(
+    application_id: UUID,
+    payload: AdminCandidateReviewPayload,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> ApplicationRecord:
+    """Update AI/admin review fields and optional status override note."""
+
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="provide at least one review field",
+        )
+    updated = await service.update_admin_review(
+        application_id=application_id,
+        updates=updates,
     )
     if updated is None:
         raise HTTPException(

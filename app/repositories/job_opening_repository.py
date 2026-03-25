@@ -30,6 +30,12 @@ class JobOpeningRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def set_paused(self, job_opening_id: UUID, paused: bool) -> JobOpeningRecord | None:
+        """Update paused state for opening and return updated record."""
+
+        raise NotImplementedError
+
+    @abstractmethod
     async def list(self, *, offset: int, limit: int) -> tuple[list[JobOpeningRecord], int]:
         """Return paginated job openings and total count."""
 

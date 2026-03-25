@@ -3,6 +3,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.error import register_exception_handlers
@@ -38,6 +39,17 @@ def create_app() -> FastAPI:
         description=runtime_config.api.description,
         lifespan=app_lifespan,
     )
+
+    if runtime_config.cors.enabled:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=runtime_config.cors.allow_origins,
+            allow_methods=runtime_config.cors.allow_methods,
+            allow_headers=runtime_config.cors.allow_headers,
+            allow_credentials=runtime_config.cors.allow_credentials,
+            expose_headers=runtime_config.cors.expose_headers,
+            max_age=runtime_config.cors.max_age_seconds,
+        )
 
     if runtime_config.security_headers.enabled:
         app.add_middleware(

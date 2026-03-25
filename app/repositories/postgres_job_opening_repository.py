@@ -35,6 +35,7 @@ class PostgresJobOpeningRepository(JobOpeningRepository):
             experience_range=payload.experience_range,
             application_open_at=payload.application_open_at,
             application_close_at=payload.application_close_at,
+            paused=False,
             responsibilities=payload.responsibilities,
             requirements=payload.requirements,
             created_at=now,
@@ -72,6 +73,18 @@ class PostgresJobOpeningRepository(JobOpeningRepository):
             else:
                 await session.rollback()
             return deleted
+
+    async def set_paused(self, job_opening_id: UUID, paused: bool) -> JobOpeningRecord | None:
+        """Set paused state for one opening."""
+
+        async with self._session_factory() as session:
+            entity = await session.get(JobOpening, job_opening_id)
+            if entity is None:
+                return None
+            entity.paused = paused
+            await session.commit()
+            await session.refresh(entity)
+            return self._to_record(entity)
 
     async def list(self, *, offset: int, limit: int) -> tuple[list[JobOpeningRecord], int]:
         """Return paginated openings and total count."""
@@ -129,6 +142,7 @@ class PostgresJobOpeningRepository(JobOpeningRepository):
             experience_range=entity.experience_range,
             application_open_at=entity.application_open_at,
             application_close_at=entity.application_close_at,
+            paused=entity.paused,
             responsibilities=list(entity.responsibilities),
             requirements=list(entity.requirements),
             created_at=entity.created_at,

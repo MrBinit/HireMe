@@ -29,6 +29,7 @@ class LocalJobOpeningRepository(JobOpeningRepository):
             id=uuid4(),
             created_at=now,
             updated_at=now,
+            paused=False,
             **payload.model_dump(),
         )
         async with self._lock:
@@ -58,6 +59,24 @@ class LocalJobOpeningRepository(JobOpeningRepository):
                 return False
             await asyncio.to_thread(self._write_records_sync, filtered)
             return True
+
+    async def set_paused(self, job_opening_id: UUID, paused: bool) -> JobOpeningRecord | None:
+        """Set paused state for one local opening."""
+
+        async with self._lock:
+            raw_records = await asyncio.to_thread(self._read_records_sync)
+            target_id = str(job_opening_id)
+            now = datetime.now(tz=timezone.utc).isoformat()
+
+            for item in raw_records:
+                if str(item.get("id", "")) != target_id:
+                    continue
+                item["paused"] = paused
+                item["updated_at"] = now
+                await asyncio.to_thread(self._write_records_sync, raw_records)
+                return JobOpeningRecord.model_validate(self._normalize_raw_record(item))
+
+            return None
 
     async def list(self, *, offset: int, limit: int) -> tuple[list[JobOpeningRecord], int]:
         """Return paginated job opening records sorted by latest created."""
@@ -122,6 +141,7 @@ class LocalJobOpeningRepository(JobOpeningRepository):
         created_at = normalized.get("created_at") or datetime.now(tz=timezone.utc).isoformat()
         normalized.setdefault("application_open_at", created_at)
         normalized.setdefault("application_close_at", "2100-01-01T00:00:00+00:00")
+        normalized.setdefault("paused", False)
         return normalized
 
     def _write_records_sync(self, raw_records: list[dict]) -> None:

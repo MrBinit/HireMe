@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-JobOpeningStatus = Literal["open", "closed"]
+JobOpeningStatus = Literal["open", "closed", "paused"]
 
 
 class JobOpeningCreatePayload(BaseModel):
@@ -27,6 +27,7 @@ class JobOpeningRecord(JobOpeningCreatePayload):
     """Stored representation of a job opening."""
 
     id: UUID
+    paused: bool = False
     status: JobOpeningStatus = "closed"
     created_at: datetime
     updated_at: datetime
@@ -41,3 +42,9 @@ class JobOpeningListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class JobOpeningPausePayload(BaseModel):
+    """Payload for pausing/resuming application intake for a job opening."""
+
+    paused: bool

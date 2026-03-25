@@ -71,6 +71,21 @@ class JobOpeningService:
             raise JobOpeningValidationError("job_opening_id must be a valid UUID") from exc
         return await self._repository.delete(parsed_id)
 
+    async def set_paused(self, job_opening_id: str, paused: bool) -> JobOpeningRecord | None:
+        """Pause or resume one job opening by UUID string."""
+
+        from uuid import UUID
+
+        try:
+            parsed_id = UUID(job_opening_id)
+        except ValueError as exc:
+            raise JobOpeningValidationError("job_opening_id must be a valid UUID") from exc
+
+        updated = await self._repository.set_paused(parsed_id, paused)
+        if updated is None:
+            return None
+        return self._with_status(updated)
+
     async def list_role_titles(self) -> list[str]:
         """Return available role titles for application selection."""
 
@@ -158,6 +173,8 @@ class JobOpeningService:
     def _resolve_status(record: JobOpeningRecord) -> str:
         """Compute whether the opening is currently open or closed."""
 
+        if record.paused:
+            return "paused"
         now = datetime.now(tz=timezone.utc)
         is_open = record.application_open_at <= now <= record.application_close_at
         return "open" if is_open else "closed"

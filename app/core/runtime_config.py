@@ -50,6 +50,7 @@ class ApplicationRuntimeConfig(BaseModel):
     default_list_limit: int = 20
     max_list_limit: int = 100
     applications_not_open_message: str = "applications have not opened yet"
+    application_paused_message: str = "Sorry, applications are currently paused for this role."
     application_closed_message: str = (
         "Sorry, the application has already been closed for this role."
     )
@@ -287,6 +288,20 @@ class SecurityHeadersRuntimeConfig(BaseModel):
     )
 
 
+class CorsRuntimeConfig(BaseModel):
+    """CORS configuration for browser-based frontend clients."""
+
+    enabled: bool = True
+    allow_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    allow_methods: list[str] = Field(default_factory=lambda: ["GET", "POST", "PATCH", "DELETE"])
+    allow_headers: list[str] = Field(
+        default_factory=lambda: ["Authorization", "Content-Type", "Accept"]
+    )
+    allow_credentials: bool = False
+    expose_headers: list[str] = Field(default_factory=list)
+    max_age_seconds: int = 600
+
+
 class RuntimeConfig(BaseModel):
     """Top-level runtime configuration model."""
 
@@ -301,6 +316,7 @@ class RuntimeConfig(BaseModel):
     parse: ParseRuntimeConfig = Field(default_factory=ParseRuntimeConfig)
     notification: NotificationRuntimeConfig = Field(default_factory=NotificationRuntimeConfig)
     google_api: GoogleApiRuntimeConfig = Field(default_factory=GoogleApiRuntimeConfig)
+    cors: CorsRuntimeConfig = Field(default_factory=CorsRuntimeConfig)
     security_headers: SecurityHeadersRuntimeConfig = Field(
         default_factory=SecurityHeadersRuntimeConfig
     )

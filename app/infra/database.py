@@ -130,6 +130,48 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             )
             await connection.execute(
                 text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS ai_score DOUBLE PRECISION"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS ai_screening_summary VARCHAR(4000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS online_research_summary VARCHAR(4000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS status_history JSONB NOT NULL DEFAULT '[]'::jsonb"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ALTER COLUMN applicant_status SET DEFAULT 'applied'"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE job_openings "
+                    "ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
+            await connection.execute(
+                text(
                     "CREATE INDEX IF NOT EXISTS idx_applications_latest_position "
                     "ON applicant_applications (latest_position)"
                 )
@@ -138,5 +180,23 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_applications_total_years_experience "
                     "ON applicant_applications (total_years_experience)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_status "
+                    "ON applicant_applications (applicant_status)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_created_at "
+                    "ON applicant_applications (created_at)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_role "
+                    "ON applicant_applications (role_selection)"
                 )
             )

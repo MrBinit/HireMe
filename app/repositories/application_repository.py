@@ -1,6 +1,7 @@
 """Repository interface for application persistence."""
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -73,6 +74,10 @@ class ApplicationRepository(ABC):
         offset: int,
         limit: int,
         job_opening_id: UUID | None = None,
+        role_selection: str | None = None,
+        applicant_status: ApplicantStatus | None = None,
+        submitted_from: datetime | None = None,
+        submitted_to: datetime | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """Return paginated applications and total count, optionally filtered by opening."""
 
@@ -113,7 +118,19 @@ class ApplicationRepository(ABC):
         *,
         application_id: UUID,
         applicant_status: ApplicantStatus,
+        note: str | None = None,
     ) -> bool:
         """Update applicant lifecycle status and return True when record exists."""
+
+        raise NotImplementedError
+
+    @abstractmethod
+    async def update_admin_review(
+        self,
+        *,
+        application_id: UUID,
+        updates: dict[str, Any],
+    ) -> bool:
+        """Update admin-review fields and return True when record exists."""
 
         raise NotImplementedError

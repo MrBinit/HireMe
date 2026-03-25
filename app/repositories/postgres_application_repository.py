@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -47,6 +49,13 @@ class PostgresApplicationRepository(ApplicationRepository):
             resume_content_type=record.resume.content_type,
             resume_size_bytes=record.resume.size_bytes,
             parse_result=record.parse_result,
+            ai_score=record.ai_score,
+            ai_screening_summary=record.ai_screening_summary,
+            online_research_summary=record.online_research_summary,
+            status_history=[
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                for item in record.status_history
+            ],
             parsed_skills=record.parsed_skills,
             parsed_education=record.parsed_education,
             latest_position=record.latest_position,
@@ -90,6 +99,10 @@ class PostgresApplicationRepository(ApplicationRepository):
         offset: int,
         limit: int,
         job_opening_id: UUID | None = None,
+        role_selection: str | None = None,
+        applicant_status: ApplicantStatus | None = None,
+        submitted_from: datetime | None = None,
+        submitted_to: datetime | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """Return paginated applications with optional job-opening filter."""
 
@@ -97,6 +110,19 @@ class PostgresApplicationRepository(ApplicationRepository):
             count_stmt = select(func.count()).select_from(ApplicantApplication)
             if job_opening_id is not None:
                 count_stmt = count_stmt.where(ApplicantApplication.job_opening_id == job_opening_id)
+            if role_selection is not None:
+                count_stmt = count_stmt.where(
+                    func.lower(ApplicantApplication.role_selection)
+                    == role_selection.strip().casefold()
+                )
+            if applicant_status is not None:
+                count_stmt = count_stmt.where(
+                    ApplicantApplication.applicant_status == applicant_status
+                )
+            if submitted_from is not None:
+                count_stmt = count_stmt.where(ApplicantApplication.created_at >= submitted_from)
+            if submitted_to is not None:
+                count_stmt = count_stmt.where(ApplicantApplication.created_at <= submitted_to)
             total_result = await session.execute(count_stmt)
             total = int(total_result.scalar_one())
 
@@ -110,6 +136,19 @@ class PostgresApplicationRepository(ApplicationRepository):
                 select_stmt = select_stmt.where(
                     ApplicantApplication.job_opening_id == job_opening_id
                 )
+            if role_selection is not None:
+                select_stmt = select_stmt.where(
+                    func.lower(ApplicantApplication.role_selection)
+                    == role_selection.strip().casefold()
+                )
+            if applicant_status is not None:
+                select_stmt = select_stmt.where(
+                    ApplicantApplication.applicant_status == applicant_status
+                )
+            if submitted_from is not None:
+                select_stmt = select_stmt.where(ApplicantApplication.created_at >= submitted_from)
+            if submitted_to is not None:
+                select_stmt = select_stmt.where(ApplicantApplication.created_at <= submitted_to)
             result = await session.execute(select_stmt)
             entities = list(result.scalars().all())
             return [self._to_record(entity) for entity in entities], total
@@ -169,15 +208,58 @@ class PostgresApplicationRepository(ApplicationRepository):
         *,
         application_id: UUID,
         applicant_status: ApplicantStatus,
+        note: str | None = None,
     ) -> bool:
         """Update applicant lifecycle status for one application."""
+
+        return await self.update_admin_review(
+            application_id=application_id,
+            updates={
+                "applicant_status": applicant_status,
+                "note": note,
+            },
+        )
+
+    async def update_admin_review(
+        self,
+        *,
+        application_id: UUID,
+        updates: dict[str, Any],
+    ) -> bool:
+        """Update admin-review fields for one application."""
 
         async with self._session_factory() as session:
             entity = await session.get(ApplicantApplication, application_id)
             if entity is None:
                 return False
 
-            entity.applicant_status = applicant_status
+            if "applicant_status" in updates and updates["applicant_status"] is not None:
+                entity.applicant_status = updates["applicant_status"]
+            if "ai_score" in updates:
+                entity.ai_score = updates["ai_score"]
+            if "ai_screening_summary" in updates:
+                entity.ai_screening_summary = updates["ai_screening_summary"]
+            if "online_research_summary" in updates:
+                entity.online_research_summary = updates["online_research_summary"]
+
+            note = updates.get("note")
+            if ("applicant_status" in updates and updates["applicant_status"] is not None) or note:
+                history = list(entity.status_history or [])
+                history.append(
+                    {
+                        "status": entity.applicant_status,
+                        "note": note,
+                        "changed_at": datetime.now(tz=timezone.utc)
+                        .isoformat()
+                        .replace(
+                            "+00:00",
+                            "Z",
+                        ),
+                        "source": "admin",
+                    }
+                )
+                entity.status_history = history
+
             await session.commit()
             return True
 
@@ -198,6 +280,10 @@ class PostgresApplicationRepository(ApplicationRepository):
             parse_result=entity.parse_result,
             parse_status=entity.parse_status,
             applicant_status=entity.applicant_status,
+            ai_score=entity.ai_score,
+            ai_screening_summary=entity.ai_screening_summary,
+            online_research_summary=entity.online_research_summary,
+            status_history=entity.status_history or [],
             reference_status=entity.reference_status,
             latest_position=entity.latest_position,
             total_years_experience=entity.total_years_experience,

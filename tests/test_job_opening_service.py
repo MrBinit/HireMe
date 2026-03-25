@@ -91,3 +91,36 @@ def test_job_opening_status_open_or_closed(tmp_path: Path) -> None:
         assert by_role["Closed Engineer"] == "closed"
 
     asyncio.run(run())
+
+
+def test_pause_job_opening_sets_status_paused(tmp_path: Path) -> None:
+    """Paused openings should expose paused status in service responses."""
+
+    async def run() -> None:
+        repo = LocalJobOpeningRepository(tmp_path / "job_openings.json")
+        service = JobOpeningService(
+            repository=repo,
+            config=JobOpeningRuntimeConfig(),
+        )
+
+        opening = await service.create(
+            JobOpeningCreatePayload(
+                role_title="Pause Target Engineer",
+                team="Platform",
+                location="remote",
+                experience_level="mid",
+                experience_range="2-3 years",
+                application_open_at=datetime.now(tz=timezone.utc) - timedelta(hours=1),
+                application_close_at=datetime.now(tz=timezone.utc) + timedelta(days=7),
+                responsibilities=["Build APIs"],
+                requirements=["Python"],
+            )
+        )
+        assert opening.status == "open"
+
+        paused = await service.set_paused(str(opening.id), True)
+        assert paused is not None
+        assert paused.status == "paused"
+        assert paused.paused is True
+
+    asyncio.run(run())

@@ -27,6 +27,7 @@ from app.schemas.application import (
     ApplicationCreatePayload,
     ApplicationRecord,
     ResumeFileMeta,
+    StatusHistoryEntry,
 )
 from app.schemas.application import ApplicationListResponse
 from app.services.email_sender import ApplicationConfirmationEmail, EmailSendError, EmailSender
@@ -80,6 +81,8 @@ class ApplicationService:
         now = datetime.now(tz=timezone.utc)
         if now < opening.application_open_at:
             raise ApplicationValidationError(self._config.applications_not_open_message)
+        if opening.paused:
+            raise ApplicationValidationError(self._config.application_paused_message)
         if now > opening.application_close_at:
             raise ApplicationValidationError(self._config.application_closed_message)
 
@@ -132,7 +135,18 @@ class ApplicationService:
             ),
             parse_result=None,
             parse_status="pending",
-            applicant_status="received",
+            applicant_status="applied",
+            ai_score=None,
+            ai_screening_summary=None,
+            online_research_summary=None,
+            status_history=[
+                StatusHistoryEntry(
+                    status="applied",
+                    note="application submitted",
+                    changed_at=created_at,
+                    source="system",
+                )
+            ],
             reference_status=False,
             latest_position=None,
             total_years_experience=None,
@@ -192,7 +206,13 @@ class ApplicationService:
     async def get_allowed_roles(self) -> list[str]:
         """Return role titles currently available from job openings."""
 
-        roles = await self._job_opening_repository.list_role_titles()
+        now = datetime.now(tz=timezone.utc)
+        openings, _ = await self._job_opening_repository.list(offset=0, limit=1000)
+        roles = [
+            item.role_title
+            for item in openings
+            if not item.paused and item.application_open_at <= now <= item.application_close_at
+        ]
         return sorted(set(roles))
 
     async def list(
@@ -201,6 +221,10 @@ class ApplicationService:
         offset: int = 0,
         limit: int | None = None,
         job_opening_id: UUID | None = None,
+        role_selection: str | None = None,
+        applicant_status: ApplicantStatus | None = None,
+        submitted_from: datetime | None = None,
+        submitted_to: datetime | None = None,
     ) -> ApplicationListResponse:
         """Return paginated applications, optionally filtered by job opening."""
 
@@ -213,11 +237,17 @@ class ApplicationService:
             raise ApplicationValidationError(
                 f"limit cannot be greater than {self._config.max_list_limit}"
             )
+        if submitted_from and submitted_to and submitted_to < submitted_from:
+            raise ApplicationValidationError("submitted_to must be later than submitted_from")
 
         items, total = await self._repository.list(
             offset=offset,
             limit=effective_limit,
             job_opening_id=job_opening_id,
+            role_selection=role_selection,
+            applicant_status=applicant_status,
+            submitted_from=submitted_from,
+            submitted_to=submitted_to,
         )
         return ApplicationListResponse(
             items=items,
@@ -236,12 +266,30 @@ class ApplicationService:
         *,
         application_id: UUID,
         applicant_status: ApplicantStatus,
+        note: str | None = None,
     ) -> ApplicationRecord | None:
         """Update applicant status and return the updated record."""
 
         updated = await self._repository.update_applicant_status(
             application_id=application_id,
             applicant_status=applicant_status,
+            note=note,
+        )
+        if not updated:
+            return None
+        return await self._repository.get_by_id(application_id)
+
+    async def update_admin_review(
+        self,
+        *,
+        application_id: UUID,
+        updates: dict[str, object],
+    ) -> ApplicationRecord | None:
+        """Update admin review fields and return updated candidate record."""
+
+        updated = await self._repository.update_admin_review(
+            application_id=application_id,
+            updates=updates,
         )
         if not updated:
             return None

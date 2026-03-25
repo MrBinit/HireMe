@@ -26,6 +26,23 @@ security:
   access_token_exp_minutes: 120
   leeway_seconds: 30
 
+cors:
+  enabled: true
+  allow_origins:
+    - http://localhost:3000
+  allow_methods:
+    - GET
+    - POST
+    - PATCH
+    - DELETE
+  allow_headers:
+    - Authorization
+    - Content-Type
+    - Accept
+  allow_credentials: false
+  expose_headers: []
+  max_age_seconds: 600
+
 security_headers:
   enabled: true
   x_content_type_options: nosniff
@@ -96,6 +113,7 @@ application:
   default_list_limit: 20
   max_list_limit: 100
   applications_not_open_message: applications have not opened yet
+  application_paused_message: Sorry, applications are currently paused for this role.
   application_closed_message: Sorry, the application has already been closed for this role.
   invalid_resume_format_message: Invalid resume format. Please upload a PDF or DOCX file.
   duplicate_application_message: "duplicate application: this email has already applied to this job opening"

@@ -50,8 +50,18 @@ class _FakeApplicationService:
         offset: int = 0,
         limit: int | None = None,
         job_opening_id=None,
+        role_selection=None,
+        applicant_status=None,
+        submitted_from=None,
+        submitted_to=None,
     ) -> ApplicationListResponse:
-        _ = (job_opening_id,)
+        _ = (
+            job_opening_id,
+            role_selection,
+            applicant_status,
+            submitted_from,
+            submitted_to,
+        )
         effective_limit = 1 if limit is None else limit
         return ApplicationListResponse(
             items=[self._record][offset : offset + effective_limit],
@@ -59,6 +69,24 @@ class _FakeApplicationService:
             offset=offset,
             limit=effective_limit,
         )
+
+    async def get_by_id(self, application_id):
+        if str(application_id) != str(self._record.id):
+            return None
+        return self._record
+
+    async def update_applicant_status(self, *, application_id, applicant_status, note=None):
+        _ = note
+        if str(application_id) != str(self._record.id):
+            return None
+        self._record = self._record.model_copy(update={"applicant_status": applicant_status})
+        return self._record
+
+    async def update_admin_review(self, *, application_id, updates):
+        if str(application_id) != str(self._record.id):
+            return None
+        self._record = self._record.model_copy(update=updates)
+        return self._record
 
 
 def _build_client() -> tuple[TestClient, _FakeApplicationService]:
@@ -80,12 +108,19 @@ def _reset_cached_config() -> None:
     get_admin_auth_service.cache_clear()
 
 
-def test_admin_login_returns_bearer_token(monkeypatch) -> None:
-    """Valid admin login should return token payload."""
+def _set_admin_test_env(monkeypatch) -> None:
+    """Set deterministic admin env vars for auth endpoint tests."""
 
     monkeypatch.setenv("ADMIN_USERNAME", "admin")
     monkeypatch.setenv("ADMIN_PASSWORD", "StrongSecret123!")
     monkeypatch.setenv("ADMIN_JWT_SECRET", "this-is-a-long-test-secret-value-123456")
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", "")
+
+
+def test_admin_login_returns_bearer_token(monkeypatch) -> None:
+    """Valid admin login should return token payload."""
+
+    _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
     client, _ = _build_client()
@@ -104,9 +139,7 @@ def test_admin_login_returns_bearer_token(monkeypatch) -> None:
 def test_admin_login_rejects_bad_credentials(monkeypatch) -> None:
     """Invalid admin password should return unauthorized."""
 
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD", "StrongSecret123!")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "this-is-a-long-test-secret-value-123456")
+    _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
     client, _ = _build_client()
@@ -121,9 +154,7 @@ def test_admin_login_rejects_bad_credentials(monkeypatch) -> None:
 def test_admin_candidates_requires_bearer_token(monkeypatch) -> None:
     """Candidate list endpoint should reject requests without auth token."""
 
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD", "StrongSecret123!")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "this-is-a-long-test-secret-value-123456")
+    _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
     client, _ = _build_client()
@@ -135,9 +166,7 @@ def test_admin_candidates_requires_bearer_token(monkeypatch) -> None:
 def test_admin_candidates_returns_data_with_token(monkeypatch) -> None:
     """Admin candidates endpoint should return candidate data for valid token."""
 
-    monkeypatch.setenv("ADMIN_USERNAME", "admin")
-    monkeypatch.setenv("ADMIN_PASSWORD", "StrongSecret123!")
-    monkeypatch.setenv("ADMIN_JWT_SECRET", "this-is-a-long-test-secret-value-123456")
+    _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
     client, _ = _build_client()

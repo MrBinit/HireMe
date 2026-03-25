@@ -19,7 +19,8 @@
   - `role_title`, `team`, `location`, `experience_level`, `experience_range`
   - `application_open_at`, `application_close_at`
   - `responsibilities`, `requirements`
-  - runtime `status` field in response (`open` or `closed`)
+  - runtime `status` field in response (`open`, `closed`, `paused`)
+  - admin pause toggle endpoint blocks submissions when paused
 - `location` is a single field: use `remote`, `onsite`, or a city/location name.
 - `experience_level` values: `intern`, `junior`, `mid`, `senior`, `staff`, `principal`.
 - `experience_range` format: `X-Y years` (example: `2-3 years`, `4-8 years`).
@@ -37,7 +38,9 @@
   - `resume.storage_path` (S3 URI such as `s3://hireme-cv-bucket/hireme/resumes/<file>.pdf` when using S3 backend)
   - `parse_result` (JSON, default `null`)
   - `parse_status` (default `pending`)
-  - `applicant_status` (default `received`)
+  - `applicant_status` (default `applied`)
+  - `ai_score`, `ai_screening_summary`, `online_research_summary`
+  - `status_history` (for status timeline and admin override notes)
   - `reference_status` (default `false`, turns `true` when references are created via endpoint)
   - denormalized parse summary columns:
     - `latest_position`
@@ -73,9 +76,11 @@
 - `GET /api/v1/admin/candidates` (admin list candidates, optional `job_opening_id`)
 - `GET /api/v1/admin/candidates/{application_id}` (admin candidate details)
 - `PATCH /api/v1/admin/candidates/{application_id}/status` (admin updates applicant status)
+- `PATCH /api/v1/admin/candidates/{application_id}/review` (admin AI fields + override note)
 - `POST /api/v1/job-openings`
 - `GET /api/v1/job-openings`
 - `DELETE /api/v1/job-openings/{job_opening_id}`
+- `PATCH /api/v1/job-openings/{job_opening_id}/pause`
 - `GET /api/v1/roles`
 - `POST /api/v1/applications` (multipart form with resume file)
   - saves applicant metadata to Postgres
@@ -91,8 +96,10 @@
   - `GET /api/v1/admin/candidates`
   - `GET /api/v1/admin/candidates/{application_id}`
   - `PATCH /api/v1/admin/candidates/{application_id}/status`
+  - `PATCH /api/v1/admin/candidates/{application_id}/review`
   - `POST /api/v1/job-openings`
   - `DELETE /api/v1/job-openings/{job_opening_id}`
+  - `PATCH /api/v1/job-openings/{job_opening_id}/pause`
   - `GET /api/v1/applications`
   - `POST /api/v1/references`
   - `GET /api/v1/references`
@@ -255,4 +262,32 @@ List applicants (admin):
 ```bash
 curl -X GET http://localhost:8000/api/v1/admin/candidates \
   -H "Authorization: Bearer ${ADMIN_JWT_TOKEN}"
+```
+
+Pause one job opening (admin):
+```bash
+curl -X PATCH http://localhost:8000/api/v1/job-openings/<JOB_ID>/pause \
+  -H "Authorization: Bearer ${ADMIN_JWT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"paused": true}'
+```
+
+## Frontend (Next.js)
+- App is in `frontend/`.
+- Candidate flow:
+  - role dropdown sourced from `GET /api/v1/roles`
+  - submit form to `POST /api/v1/applications`
+  - shows success/error, including configured max-size guidance from backend.
+- Admin flow:
+  - login `POST /api/v1/admin/login`
+  - dashboard table + filters from `GET /api/v1/admin/candidates`
+  - candidate profile from `GET /api/v1/admin/candidates/{application_id}`
+  - manual override + AI notes via `PATCH /api/v1/admin/candidates/{application_id}/review`
+  - create/delete/pause openings via job-opening admin endpoints.
+- Run:
+```bash
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
 ```

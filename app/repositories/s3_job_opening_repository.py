@@ -38,6 +38,7 @@ class S3JobOpeningRepository(JobOpeningRepository):
             id=uuid4(),
             created_at=now,
             updated_at=now,
+            paused=False,
             **payload.model_dump(),
         )
         role_key = self._role_index_key(record.role_title)
@@ -78,6 +79,25 @@ class S3JobOpeningRepository(JobOpeningRepository):
         await self._store.delete(self._record_key(job_opening_id))
         await self._store.delete(self._role_index_key(opening.role_title))
         return True
+
+    async def set_paused(self, job_opening_id: UUID, paused: bool) -> JobOpeningRecord | None:
+        """Set paused state for one S3-backed opening."""
+
+        opening = await self.get(job_opening_id)
+        if opening is None:
+            return None
+
+        updated = opening.model_copy(
+            update={
+                "paused": paused,
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+        )
+        await self._store.put_json(
+            self._record_key(job_opening_id),
+            updated.model_dump(mode="json"),
+        )
+        return updated
 
     async def list(self, *, offset: int, limit: int) -> tuple[list[JobOpeningRecord], int]:
         """List openings from S3 objects sorted by latest creation time."""
@@ -176,4 +196,5 @@ class S3JobOpeningRepository(JobOpeningRepository):
         created_at = normalized.get("created_at") or datetime.now(tz=timezone.utc).isoformat()
         normalized.setdefault("application_open_at", created_at)
         normalized.setdefault("application_close_at", "2100-01-01T00:00:00+00:00")
+        normalized.setdefault("paused", False)
         return normalized

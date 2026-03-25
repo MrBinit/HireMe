@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 from app.repositories.application_repository import (
@@ -60,6 +62,10 @@ class LocalApplicationRepository(ApplicationRepository):
         offset: int,
         limit: int,
         job_opening_id: UUID | None = None,
+        role_selection: str | None = None,
+        applicant_status: ApplicantStatus | None = None,
+        submitted_from: datetime | None = None,
+        submitted_to: datetime | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """Return paginated local applications, optionally filtered by opening."""
 
@@ -67,8 +73,32 @@ class LocalApplicationRepository(ApplicationRepository):
         filtered: list[dict] = []
         target_id = str(job_opening_id) if job_opening_id is not None else None
         for item in raw_records:
-            if target_id is None or str(item.get("job_opening_id", "")) == target_id:
-                filtered.append(item)
+            if target_id is not None and str(item.get("job_opening_id", "")) != target_id:
+                continue
+            if role_selection is not None:
+                role_value = str(item.get("role_selection", "")).strip().casefold()
+                if role_value != role_selection.strip().casefold():
+                    continue
+            if applicant_status is not None and item.get("applicant_status") != applicant_status:
+                continue
+            created_at_raw = item.get("created_at")
+            created_at = None
+            if isinstance(created_at_raw, str):
+                try:
+                    created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
+                except ValueError:
+                    created_at = None
+            if created_at is not None and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if (
+                submitted_from is not None
+                and created_at is not None
+                and created_at < submitted_from
+            ):
+                continue
+            if submitted_to is not None and created_at is not None and created_at > submitted_to:
+                continue
+            filtered.append(item)
         parsed = [ApplicationRecord.model_validate(item) for item in filtered]
         parsed.sort(key=lambda record: record.created_at, reverse=True)
         total = len(parsed)
@@ -138,8 +168,25 @@ class LocalApplicationRepository(ApplicationRepository):
         *,
         application_id: UUID,
         applicant_status: ApplicantStatus,
+        note: str | None = None,
     ) -> bool:
         """Update applicant lifecycle status for one local application."""
+
+        return await self.update_admin_review(
+            application_id=application_id,
+            updates={
+                "applicant_status": applicant_status,
+                "note": note,
+            },
+        )
+
+    async def update_admin_review(
+        self,
+        *,
+        application_id: UUID,
+        updates: dict[str, Any],
+    ) -> bool:
+        """Update admin-review fields for one local application."""
 
         async with self._lock:
             raw_records = await asyncio.to_thread(self._read_records_sync)
@@ -148,7 +195,35 @@ class LocalApplicationRepository(ApplicationRepository):
             for item in raw_records:
                 if str(item.get("id", "")) != target_id:
                     continue
-                item["applicant_status"] = applicant_status
+
+                now_iso = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                if "applicant_status" in updates and updates["applicant_status"] is not None:
+                    item["applicant_status"] = updates["applicant_status"]
+
+                if "ai_score" in updates:
+                    item["ai_score"] = updates["ai_score"]
+                if "ai_screening_summary" in updates:
+                    item["ai_screening_summary"] = updates["ai_screening_summary"]
+                if "online_research_summary" in updates:
+                    item["online_research_summary"] = updates["online_research_summary"]
+
+                note = updates.get("note")
+                if (
+                    "applicant_status" in updates and updates["applicant_status"] is not None
+                ) or note:
+                    history = item.get("status_history")
+                    if not isinstance(history, list):
+                        history = []
+                    history.append(
+                        {
+                            "status": item.get("applicant_status"),
+                            "note": note,
+                            "changed_at": now_iso,
+                            "source": "admin",
+                        }
+                    )
+                    item["status_history"] = history
+
                 await asyncio.to_thread(self._write_records_sync, raw_records)
                 return True
 

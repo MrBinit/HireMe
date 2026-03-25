@@ -1,5 +1,6 @@
 """API routes for candidate application submission."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 from app.api.deps import get_admin_principal, get_application_service_dep
 from app.core.security import AdminPrincipal
 from app.schemas.application import (
+    ApplicantStatus,
     ApplicationCreatePayload,
     ApplicationListResponse,
     ApplicationRecord,
@@ -67,6 +69,10 @@ async def list_applications(
     offset: int = Query(default=0, ge=0),
     limit: int | None = Query(default=None, ge=1),
     job_opening_id: UUID | None = Query(default=None),
+    role_selection: str | None = Query(default=None),
+    applicant_status: ApplicantStatus | None = Query(default=None),
+    submitted_from: datetime | None = Query(default=None),
+    submitted_to: datetime | None = Query(default=None),
     _: AdminPrincipal = Depends(get_admin_principal),
     service: ApplicationService = Depends(get_application_service_dep),
 ) -> ApplicationListResponse:
@@ -76,4 +82,8 @@ async def list_applications(
         offset=offset,
         limit=limit,
         job_opening_id=job_opening_id,
+        role_selection=role_selection,
+        applicant_status=applicant_status,
+        submitted_from=submitted_from,
+        submitted_to=submitted_to,
     )

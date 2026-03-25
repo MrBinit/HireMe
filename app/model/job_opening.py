@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, String, Uuid, func
+from sqlalchemy import JSON, Boolean, DateTime, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.model.base import Base
@@ -22,6 +22,12 @@ class JobOpening(Base):
     experience_range: Mapped[str] = mapped_column(String(30), nullable=False)
     application_open_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     application_close_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    paused: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     responsibilities: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     requirements: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

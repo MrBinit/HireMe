@@ -453,3 +453,81 @@ def test_admin_can_update_applicant_status(tmp_path: Path) -> None:
         assert updated.applicant_status == "interview"
 
     asyncio.run(run())
+
+
+def test_application_rejected_when_job_opening_is_paused(tmp_path: Path) -> None:
+    """Submission should be rejected when admin pauses the job opening."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Paused Engineer {uuid4().hex[:6]}",
+        )
+        paused = await job_service.set_paused(str(opening.id), True)
+        assert paused is not None
+        assert paused.status == "paused"
+
+        error = None
+        try:
+            await app_service.submit(
+                payload=ApplicationCreatePayload(
+                    full_name="Paused User",
+                    email="paused@example.com",
+                    linkedin_url="https://www.linkedin.com/in/paused-user",
+                    portfolio_url="https://paused.dev",
+                    github_url="https://github.com/paused-user",
+                    role_selection=opening.role_title,
+                ),
+                resume=_resume_file(),
+            )
+        except ApplicationValidationError as exc:
+            error = exc
+
+        assert error is not None
+        assert "paused" in str(error).lower()
+
+    asyncio.run(run())
+
+
+def test_admin_review_update_persists_ai_fields_and_history(tmp_path: Path) -> None:
+    """Admin review update should persist AI metadata and status-history note."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Review Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Review User",
+                email="review@example.com",
+                linkedin_url="https://www.linkedin.com/in/review-user",
+                portfolio_url="https://review.dev",
+                github_url="https://github.com/review-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        updated = await app_service.update_admin_review(
+            application_id=created.id,
+            updates={
+                "applicant_status": "shortlisted",
+                "note": "Manual override after profile review",
+                "ai_score": 88.5,
+                "ai_screening_summary": "Strong backend fit.",
+                "online_research_summary": "Open-source activity looks relevant.",
+            },
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "shortlisted"
+        assert updated.ai_score == 88.5
+        assert updated.ai_screening_summary == "Strong backend fit."
+        assert updated.online_research_summary == "Open-source activity looks relevant."
+        assert updated.status_history
+        assert "Manual override" in (updated.status_history[-1].note or "")
+
+    asyncio.run(run())
