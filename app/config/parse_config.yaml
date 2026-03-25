@@ -1,0 +1,75 @@
+parse:
+  use_queue: true
+  provider: sqs
+  region: us-east-1
+  queue_name: hireme-resume-parse
+  worker_concurrency: 20
+  max_in_flight_per_worker: 20
+  receive_batch_size: 10
+  receive_wait_seconds: 20
+  enqueue_timeout_seconds: 2
+  fail_submission_on_enqueue_error: false
+  max_extracted_chars: 50000
+  llm_fallback_min_chars: 400
+  max_section_lines: 40
+  parse_timeout_seconds: 60
+  visibility_timeout_seconds: 300
+  max_receive_count: 5
+  link_rules:
+    linkedin_domains:
+      - linkedin.com
+    github_domains:
+      - github.com
+    project_domains:
+      - github.com
+      - gitlab.com
+      - bitbucket.org
+      - dev.to
+      - behance.net
+      - dribbble.com
+      - kaggle.com
+    excluded_personal_domains:
+      - linkedin.com
+      - github.com
+      - gitlab.com
+      - bitbucket.org
+      - dev.to
+      - medium.com
+      - behance.net
+      - dribbble.com
+      - kaggle.com
+      - x.com
+      - twitter.com
+  section_aliases:
+    skills:
+      - skills
+      - technical skills
+      - core skills
+      - technical expertise
+      - technologies
+      - tech stack
+    experience:
+      - experience
+      - work experience
+      - professional experience
+      - employment history
+    projects:
+      - projects
+      - project experience
+      - personal projects
+      - key projects
+    links:
+      - links
+      - online profiles
+      - profiles
+      - social links
+      - portfolio links
+      - web links
+    contact:
+      - contact
+      - contact information
+      - personal details
+    education:
+      - education
+      - academic background
+      - qualifications

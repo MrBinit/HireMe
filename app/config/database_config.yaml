@@ -1,0 +1,16 @@
+storage:
+  backend: postgres
+  resume_backend: s3
+  auto_create_tables: true
+
+postgres:
+  pool_size: 20
+  max_overflow: 40
+  pool_timeout_seconds: 30
+  pool_recycle_seconds: 1800
+  pool_pre_ping: true
+  connect_timeout_seconds: 10
+  command_timeout_seconds: 60
+  echo_sql: false
+  ssl_mode: require
+  ssl_root_cert_path:

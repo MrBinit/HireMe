@@ -1,0 +1,20 @@
+notification:
+  enabled: true
+  provider: smtp
+  sender_name: HireMe Team
+  sender_email: doersbinit@gmail.com
+  smtp:
+    host: smtp.gmail.com
+    port: 587
+    use_starttls: true
+    use_ssl: false
+  confirmation_subject_template: "Application submitted - HireMe"
+  confirmation_body_template: |
+    Hi {candidate_name},
+
+    Thank you for applying to HireMe. Your application has been submitted.
+
+    Regards,
+    HireMe Team
+  send_timeout_seconds: 5
+  fail_submission_on_send_error: false

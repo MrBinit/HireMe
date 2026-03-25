@@ -1,0 +1,13 @@
+s3:
+  region: us-east-1
+  bucket: hireme-cv-bucket
+  force_path_style: false
+  job_openings_prefix: hireme/job-openings
+  job_opening_role_index_prefix: hireme/job-opening-role-index
+  applications_prefix: hireme/applications
+  application_dedupe_prefix: hireme/application-dedupe
+  resumes_prefix: hireme/resumes
+  list_page_size: 1000
+  upload_max_concurrency: 10
+  upload_multipart_threshold_mb: 8
+  upload_multipart_chunksize_mb: 8
