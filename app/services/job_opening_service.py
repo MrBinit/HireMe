@@ -107,6 +107,7 @@ class JobOpeningService:
         requirements = [item.strip() for item in payload.requirements if item.strip()]
         return JobOpeningCreatePayload(
             role_title=payload.role_title.strip(),
+            manager_email=payload.manager_email.strip().lower(),
             team=payload.team.strip(),
             location=payload.location.strip(),
             experience_level=payload.experience_level.strip().lower(),

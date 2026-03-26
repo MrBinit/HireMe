@@ -2,6 +2,7 @@
 
 ## Related Doc
 - DB/S3/SQS setup: `docs/db_setup.md`
+- Phase 02 implementation write-up: `docs/phase_02_hiring_intelligence_pipeline.md`
 
 ## Features implemented
 - Async FastAPI REST API for job openings and candidate applications.
@@ -48,6 +49,7 @@
     - `key_achievements`
   - `parse_status` (default `pending`)
   - `applicant_status` (default `applied`)
+  - `applicant_status` is auto-updated to `shortlisted` when AI score is `>= ai_score_threshold`
   - `ai_score`, `ai_screening_summary`, `online_research_summary`
   - `rejection_reason` (`Candidate failed in initial screening.` or `Candidate did not meet the AI score threshold.`)
   - `parsed_total_years_experience`, `parsed_search_text` (fast prefilter columns)
@@ -99,6 +101,48 @@
 - `GET /api/v1/references?application_id=<uuid>` (list references for one candidate application)
 - `GET /health`
 
+## Online Research Script
+- Config file: `app/config/research_config.yaml`
+- Secrets in `.env`:
+  - `SERPAPI_API_KEY`
+  - `GITHUB_API_TOKEN`
+  - `TWITTER_CONSUMER_KEY` (optional; used by standalone Twitter extractor, not by mocked enrichment flow)
+  - `TWITTER_CONSUMER_SECRET` (optional; used by standalone Twitter extractor)
+  - `TWITTER_BEARER_TOKEN` (optional; used by standalone Twitter extractor)
+- Optional env overrides:
+  - `SERPAPI_ENABLED`
+  - `SERPAPI_GOOGLE_SEARCH_URL`
+  - `SERPAPI_ENGINE`
+  - `SERPAPI_ALWAYS_WEB_RETRIEVAL_ENABLED`
+  - `SERPAPI_QUERY_PLANNER_USE_LLM`
+  - `SERPAPI_RETRIEVAL_LOOP_USE_LLM`
+- Run:
+  ```bash
+  venv/bin/python -m app.scripts.run_online_research --limit 100
+  ```
+- Shortlisted enrichment run:
+  ```bash
+  venv/bin/python -m app.scripts.enrich_shortlisted_candidates --limit 50
+  ```
+- Full shortlisted enrichment (structured extractors + cross-checks + primary/fallback LLM synthesis):
+  ```bash
+  venv/bin/python -m app.scripts.enrich_shortlisted_llm_profiles --limit 50
+  ```
+- `enrich_shortlisted_candidates` now runs in two phases per candidate:
+  - phase 1 (no LLM): LinkedIn/X/portfolio search + GitHub API extraction into structured JSON
+  - phase 2 (single LLM call, primary Bedrock model): cross-reference resume vs profiles, discrepancy detection, and 3-5 sentence candidate brief
+- `enrich_shortlisted_llm_profiles` follows strict structured flow:
+  - uses `parse_result` from candidate table
+  - uses `linkedin_url` + `github_url` from candidate table (no guessed links)
+  - mocks Twitter block intentionally in this pipeline
+  - runs explicit resume-vs-LinkedIn and resume-vs-GitHub cross-checks
+  - emits issue flags (`experience_mismatch`, `missing_projects`, `skill_differences`)
+  - calls Bedrock primary model first and fallback model on failure
+  - persists compact structured JSON in `online_research_summary`
+- Prompt/config for phase 2 is in `app/config/research_config.yaml` under:
+  - `research.enrichment.llm_analysis_enabled`
+  - `research.enrichment.llm_prompt_template`
+
 ## Admin JWT Protection
 - Protected with bearer JWT:
   - `GET /api/v1/admin/candidates`
@@ -107,6 +151,8 @@
   - `PATCH /api/v1/admin/candidates/{application_id}/review`
   - `POST /api/v1/admin/candidates/{application_id}/evaluate`
   - `POST /api/v1/admin/candidates/{application_id}/evaluate/queue`
+  - `POST /api/v1/admin/candidates/{application_id}/research`
+  - `POST /api/v1/admin/candidates/{application_id}/research/queue`
   - `POST /api/v1/job-openings`
   - `DELETE /api/v1/job-openings/{job_opening_id}`
   - `PATCH /api/v1/job-openings/{job_opening_id}/pause`
@@ -153,6 +199,8 @@
 - Parse queue endpoint is read from `.env` as `SQS_PARSE_QUEUE_URL`.
 - LLM evaluation queue runtime knobs are under `evaluation` in `app/config/evaluation_config.yaml`.
 - Evaluation queue endpoint is read from `.env` as `SQS_EVALUATION_QUEUE_URL`.
+- Research enrichment queue runtime knobs are under `research.enrichment` in `app/config/research_config.yaml`.
+- Research enrichment queue endpoint is read from `.env` as `SQS_RESEARCH_QUEUE_URL`.
 
 ## Workers
 - Run API and workers as separate processes:
@@ -165,6 +213,9 @@
   ```bash
   venv/bin/python -m app.scripts.sqs_evaluation_worker
   ```
+  ```bash
+  venv/bin/python -m app.scripts.sqs_research_enrichment_worker
+  ```
 - Submission path is fast and non-blocking for parsing:
   1) API stores applicant row in Postgres + resume in S3.
   2) API enqueues parse message to SQS.
@@ -173,6 +224,10 @@
   1) Admin triggers evaluation endpoint.
   2) API enqueues evaluation message to SQS and sets `evaluation_status=queued`.
   3) Evaluation worker sets `evaluation_status` through `in_progress -> completed|failed` and persists AI fields.
+- Research enrichment path is async and queue-backed:
+  1) Admin triggers research endpoint.
+  2) API enqueues enrichment message to SQS.
+  3) Research worker runs LinkedIn/GitHub extractors + cross-check + LLM synthesis and writes compact JSON to `online_research_summary`.
 - Parse-first strategy:
   - first stage extracts raw text from PDF/DOCX
   - parse result stores compact structured fields only:
@@ -196,32 +251,37 @@
 4. Set `DATABASE_URL` in `.env` to your RDS PostgreSQL URL.
 5. Set `SQS_PARSE_QUEUE_URL` in `.env` to your parse queue URL.
 6. Set `SQS_EVALUATION_QUEUE_URL` in `.env` to your LLM evaluation queue URL.
-7. Set AWS credentials in `.env` (for S3/SQS/Bedrock):
+7. Set `SQS_RESEARCH_QUEUE_URL` in `.env` to your research enrichment queue URL.
+8. Set AWS credentials in `.env` (for S3/SQS/Bedrock):
    - `AWS_ACCESS_KEY_ID`
    - `AWS_SECRET_ACCESS_KEY`
    - optional: `AWS_SESSION_TOKEN`
    - optional: `BEDROCK_ENDPOINT_URL` (local/test override)
-8. Set SMTP credential keys in `.env` for confirmation emails:
+9. Set SMTP credential keys in `.env` for confirmation emails:
    - `SMTP_USERNAME`
    - `SMTP_PASSWORD`
-9. Set JWT secret in `.env`:
+10. Set JWT secret in `.env`:
    - `ADMIN_JWT_SECRET`
-10. Set admin login credentials in `.env`:
+11. Set admin login credentials in `.env`:
    - `ADMIN_USERNAME`
    - `ADMIN_PASSWORD_HASH` (recommended) or `ADMIN_PASSWORD` (fallback)
-11. Start API:
+12. Start API:
    ```bash
    venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-12. Start parse worker:
+13. Start parse worker:
    ```bash
    venv/bin/python -m app.scripts.sqs_worker
    ```
-13. Start evaluation worker:
+14. Start evaluation worker:
+  ```bash
+  venv/bin/python -m app.scripts.sqs_evaluation_worker
+  ```
+15. Start research enrichment worker:
    ```bash
-   venv/bin/python -m app.scripts.sqs_evaluation_worker
+   venv/bin/python -m app.scripts.sqs_research_enrichment_worker
    ```
-14. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
+16. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
 
 ## Tests
 Run the test suite:

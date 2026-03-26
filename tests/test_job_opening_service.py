@@ -25,6 +25,7 @@ def test_delete_job_opening_by_id(tmp_path: Path) -> None:
         opening = await service.create(
             JobOpeningCreatePayload(
                 role_title="Delete Me Engineer",
+                manager_email="manager@example.com",
                 team="Platform",
                 location="remote",
                 experience_level="mid",
@@ -58,6 +59,7 @@ def test_job_opening_status_open_or_closed(tmp_path: Path) -> None:
         open_record = await service.create(
             JobOpeningCreatePayload(
                 role_title="Open Engineer",
+                manager_email="manager@example.com",
                 team="Platform",
                 location="remote",
                 experience_level="mid",
@@ -71,6 +73,7 @@ def test_job_opening_status_open_or_closed(tmp_path: Path) -> None:
         closed_record = await service.create(
             JobOpeningCreatePayload(
                 role_title="Closed Engineer",
+                manager_email="manager@example.com",
                 team="Platform",
                 location="remote",
                 experience_level="mid",
@@ -106,6 +109,7 @@ def test_pause_job_opening_sets_status_paused(tmp_path: Path) -> None:
         opening = await service.create(
             JobOpeningCreatePayload(
                 role_title="Pause Target Engineer",
+                manager_email="manager@example.com",
                 team="Platform",
                 location="remote",
                 experience_level="mid",

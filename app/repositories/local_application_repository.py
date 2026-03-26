@@ -249,6 +249,8 @@ class LocalApplicationRepository(ApplicationRepository):
                     item["ai_score"] = updates["ai_score"]
                 if "ai_screening_summary" in updates:
                     item["ai_screening_summary"] = updates["ai_screening_summary"]
+                if "candidate_brief" in updates:
+                    item["candidate_brief"] = updates["candidate_brief"]
                 if "online_research_summary" in updates:
                     item["online_research_summary"] = updates["online_research_summary"]
 

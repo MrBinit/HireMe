@@ -29,6 +29,7 @@ class PostgresJobOpeningRepository(JobOpeningRepository):
         entity = JobOpening(
             id=uuid4(),
             role_title=payload.role_title,
+            manager_email=payload.manager_email,
             team=payload.team,
             location=payload.location,
             experience_level=payload.experience_level,
@@ -136,6 +137,7 @@ class PostgresJobOpeningRepository(JobOpeningRepository):
         return JobOpeningRecord(
             id=entity.id,
             role_title=entity.role_title,
+            manager_email=entity.manager_email,
             team=entity.team,
             location=entity.location,
             experience_level=entity.experience_level,

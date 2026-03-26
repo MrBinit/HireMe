@@ -1,0 +1,157 @@
+research:
+  enabled: true
+  provider: serpapi
+  google_search_url: https://serpapi.com/search.json
+  engine: google
+  always_web_retrieval_enabled: true
+  query_planner_use_llm: true
+  retrieval_loop_use_llm: true
+  request_timeout_seconds: 15
+  max_concurrency: 8
+  results_per_query: 5
+  max_summary_chars: 4000
+  only_when_missing_urls: true
+  target_statuses:
+    - screened
+    - shortlisted
+    - in_interview
+    - offer
+    - sent_to_manager
+  linkedin_query_template: 'site:linkedin.com/in "{full_name}" "{role_selection}"'
+  twitter_query_template: '(site:x.com OR site:twitter.com) "{full_name}" "{role_selection}"'
+  profile_query_template: '"{full_name}" "{role_selection}"'
+  links_limit_per_query: 3
+  linkedin_extract:
+    query_templates:
+      - "site:linkedin.com/in {linkedin_handle}"
+      - '"{linkedin_url}"'
+      - 'site:linkedin.com/in "{full_name}" "{role_selection}"'
+    results_per_query: 8
+    max_linkedin_hits: 12
+    max_evidence_lines: 10
+    min_skill_token_length: 3
+    min_position_token_length: 3
+    max_output_skills: 30
+    max_output_employers: 20
+    max_output_positions: 20
+  linkedin_text_extract:
+    section_headings:
+      experience:
+        - experience
+      education:
+        - education
+      licenses_and_certifications:
+        - licenses & certifications
+        - licenses and certifications
+      projects:
+        - projects
+      skills:
+        - skills
+    stop_headings:
+      - interests
+      - top voices
+      - companies
+      - groups
+      - newsletters
+      - schools
+      - profile language
+      - public profile & url
+      - who your viewers also viewed
+      - people you may know
+      - you might like
+    ignore_line_patterns:
+      - "^\\s*show all\\s*$"
+      - "^\\s*show credential\\s*$"
+      - "^\\s*message\\s*$"
+      - "^\\s*connect\\s*$"
+      - "^\\s*follow\\s*$"
+      - "^\\s*view\\s*$"
+      - "^\\s*private to you\\s*$"
+      - ".*\\blogo\\s*$"
+      - "^\\s*thumbnail for\\s+.*$"
+      - ".*someone at .*"
+      - ".*someone in .*"
+      - ".*followers?$"
+    bullet_prefixes:
+      - "•"
+      - "-"
+      - "*"
+    month_names:
+      - Jan
+      - Feb
+      - Mar
+      - Apr
+      - May
+      - Jun
+      - Jul
+      - Aug
+      - Sep
+      - Oct
+      - Nov
+      - Dec
+    max_items_per_section: 100
+  github:
+    api_base_url: https://api.github.com
+    repos_per_user: 10
+    max_repo_items: 30
+    max_topics_per_repo: 5
+    max_repos_in_summary: 5
+    max_primary_languages: 5
+    max_repo_description_chars: 220
+    activity_active_within_days: 180
+    request_timeout_seconds: 12
+    user_agent: hireme-candidate-research/1.0
+  enrichment:
+    use_queue: true
+    provider: sqs
+    region: us-east-1
+    queue_name: hireme-candidate-research-enrichment
+    enqueue_timeout_seconds: 2.0
+    worker_concurrency: 8
+    max_in_flight_per_worker: 8
+    receive_batch_size: 10
+    receive_wait_seconds: 20
+    visibility_timeout_seconds: 300
+    max_receive_count: 5
+    target_statuses:
+      - shortlisted
+    max_candidates_per_run: 200
+    max_profile_hits: 6
+    max_twitter_hits: 6
+    max_portfolio_hits: 6
+    max_discrepancies: 8
+    min_brief_sentences: 3
+    max_brief_sentences: 5
+    llm_analysis_enabled: true
+    llm_max_tokens: 900
+    llm_prompt_template: |
+      You are a hiring research analyst.
+      Use ONLY the provided resume and extracted profile JSON.
+
+      TASKS:
+      1) Cross-reference resume vs online profiles.
+      2) Detect factual discrepancies or missing corroboration.
+      3) Write a 3-5 sentence hiring brief for a hiring manager.
+
+      RULES:
+      - Do not hallucinate.
+      - If evidence is missing, explicitly say "insufficient public evidence".
+      - Keep all outputs concise and factual.
+      - Return strict JSON only.
+
+      CANDIDATE: {candidate_name}
+      ROLE: {role_selection}
+      RESUME_JSON: {resume_json}
+      EXTRACTED_JSON: {extracted_json}
+
+      OUTPUT JSON SCHEMA:
+      {
+        "cross_reference": {
+          "employment_alignment": ["..."],
+          "skills_alignment": ["..."],
+          "project_alignment": ["..."]
+        },
+        "discrepancies": ["..."],
+        "summary": "3-5 sentence candidate brief"
+      }
+    max_research_json_chars: 3800

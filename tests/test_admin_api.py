@@ -13,6 +13,7 @@ from app.api.deps import (
     get_application_service_dep,
     get_candidate_evaluation_service_dep,
     get_evaluation_queue_publisher_dep,
+    get_research_queue_publisher_dep,
 )
 from app.api.v1.admin import router as admin_router
 from app.core.runtime_config import get_runtime_config
@@ -20,6 +21,7 @@ from app.core.settings import get_settings
 from app.schemas.application import ApplicationListResponse, ApplicationRecord, ResumeFileMeta
 from app.schemas.evaluation import CandidateEvaluationResult, EvaluationBreakdown
 from app.services.evaluation_queue import CandidateEvaluationJob
+from app.services.research_queue import CandidateResearchEnrichmentJob
 
 
 class _FakeApplicationService:
@@ -39,7 +41,7 @@ class _FakeApplicationService:
             role_selection="Backend Engineer",
             parse_result=None,
             parse_status="pending",
-            applicant_status="received",
+            applicant_status="shortlisted",
             reference_status=False,
             resume=ResumeFileMeta(
                 original_filename="resume.pdf",
@@ -133,7 +135,22 @@ class _FakeEvaluationQueuePublisher:
         self.jobs.append(job)
 
 
-def _build_client() -> tuple[TestClient, _FakeApplicationService, _FakeEvaluationQueuePublisher]:
+class _FakeResearchQueuePublisher:
+    """Minimal research queue publisher for admin endpoint tests."""
+
+    def __init__(self) -> None:
+        self.jobs: list[CandidateResearchEnrichmentJob] = []
+
+    async def publish(self, job: CandidateResearchEnrichmentJob) -> None:
+        self.jobs.append(job)
+
+
+def _build_client() -> tuple[
+    TestClient,
+    _FakeApplicationService,
+    _FakeEvaluationQueuePublisher,
+    _FakeResearchQueuePublisher,
+]:
     """Create test client with fake application service override."""
 
     app = FastAPI()
@@ -141,12 +158,14 @@ def _build_client() -> tuple[TestClient, _FakeApplicationService, _FakeEvaluatio
 
     fake_service = _FakeApplicationService()
     fake_queue = _FakeEvaluationQueuePublisher()
+    fake_research_queue = _FakeResearchQueuePublisher()
     app.dependency_overrides[get_application_service_dep] = lambda: fake_service
     app.dependency_overrides[get_candidate_evaluation_service_dep] = (
         lambda: _FakeCandidateEvaluationService()
     )
     app.dependency_overrides[get_evaluation_queue_publisher_dep] = lambda: fake_queue
-    return TestClient(app), fake_service, fake_queue
+    app.dependency_overrides[get_research_queue_publisher_dep] = lambda: fake_research_queue
+    return TestClient(app), fake_service, fake_queue, fake_research_queue
 
 
 def _reset_cached_config() -> None:
@@ -172,7 +191,7 @@ def test_admin_login_returns_bearer_token(monkeypatch) -> None:
     _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
-    client, _, _ = _build_client()
+    client, _, _, _ = _build_client()
     response = client.post(
         "/api/v1/admin/login",
         json={"username": "admin", "password": "StrongSecret123!"},
@@ -191,7 +210,7 @@ def test_admin_login_rejects_bad_credentials(monkeypatch) -> None:
     _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
-    client, _, _ = _build_client()
+    client, _, _, _ = _build_client()
     response = client.post(
         "/api/v1/admin/login",
         json={"username": "admin", "password": "wrong-password"},
@@ -206,7 +225,7 @@ def test_admin_candidates_requires_bearer_token(monkeypatch) -> None:
     _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
-    client, _, _ = _build_client()
+    client, _, _, _ = _build_client()
     response = client.get("/api/v1/admin/candidates")
 
     assert response.status_code == 401
@@ -218,7 +237,7 @@ def test_admin_candidates_returns_data_with_token(monkeypatch) -> None:
     _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
-    client, _, _ = _build_client()
+    client, _, _, _ = _build_client()
     login_response = client.post(
         "/api/v1/admin/login",
         json={"username": "admin", "password": "StrongSecret123!"},
@@ -242,7 +261,7 @@ def test_admin_candidate_evaluation_endpoint_enqueues_job(monkeypatch) -> None:
     _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
-    client, fake_service, fake_queue = _build_client()
+    client, fake_service, fake_queue, _ = _build_client()
     login_response = client.post(
         "/api/v1/admin/login",
         json={"username": "admin", "password": "StrongSecret123!"},
@@ -268,7 +287,7 @@ def test_admin_candidate_evaluation_queue_endpoint_enqueues_job(monkeypatch) -> 
     _set_admin_test_env(monkeypatch)
     _reset_cached_config()
 
-    client, fake_service, fake_queue = _build_client()
+    client, fake_service, fake_queue, _ = _build_client()
     login_response = client.post(
         "/api/v1/admin/login",
         json={"username": "admin", "password": "StrongSecret123!"},
@@ -286,3 +305,55 @@ def test_admin_candidate_evaluation_queue_endpoint_enqueues_job(monkeypatch) -> 
     assert body["queued"] is True
     assert len(fake_queue.jobs) == 1
     assert str(fake_queue.jobs[0].application_id) == str(fake_service._record.id)
+
+
+def test_admin_candidate_research_endpoint_enqueues_job(monkeypatch) -> None:
+    """Admin research endpoint should enqueue candidate research job."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, fake_research_queue = _build_client()
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.post(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/research",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["application_id"] == str(fake_service._record.id)
+    assert body["queued"] is True
+    assert len(fake_research_queue.jobs) == 1
+    assert str(fake_research_queue.jobs[0].application_id) == str(fake_service._record.id)
+
+
+def test_admin_candidate_research_queue_endpoint_enqueues_job(monkeypatch) -> None:
+    """Admin research queue endpoint should enqueue candidate research job."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, fake_research_queue = _build_client()
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.post(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/research/queue",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["application_id"] == str(fake_service._record.id)
+    assert body["queued"] is True
+    assert len(fake_research_queue.jobs) == 1
+    assert str(fake_research_queue.jobs[0].application_id) == str(fake_service._record.id)

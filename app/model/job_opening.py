@@ -16,6 +16,7 @@ class JobOpening(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     role_title: Mapped[str] = mapped_column(String(120), nullable=False, index=True, unique=True)
+    manager_email: Mapped[str] = mapped_column(String(320), nullable=False)
     team: Mapped[str] = mapped_column(String(120), nullable=False)
     location: Mapped[str] = mapped_column(String(120), nullable=False)
     experience_level: Mapped[str] = mapped_column(String(30), nullable=False)

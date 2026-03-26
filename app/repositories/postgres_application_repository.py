@@ -38,7 +38,7 @@ class PostgresApplicationRepository(ApplicationRepository):
             full_name=record.full_name,
             email=str(record.email),
             linkedin_url=str(record.linkedin_url) if record.linkedin_url else None,
-            portfolio_url=str(record.portfolio_url),
+            portfolio_url=str(record.portfolio_url) if record.portfolio_url else None,
             github_url=str(record.github_url),
             twitter_url=str(record.twitter_url) if record.twitter_url else None,
             role_selection=record.role_selection,
@@ -53,6 +53,7 @@ class PostgresApplicationRepository(ApplicationRepository):
             rejection_reason=record.rejection_reason,
             ai_score=record.ai_score,
             ai_screening_summary=record.ai_screening_summary,
+            candidate_brief=record.candidate_brief,
             online_research_summary=record.online_research_summary,
             status_history=[
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else item
@@ -226,6 +227,8 @@ class PostgresApplicationRepository(ApplicationRepository):
                 entity.ai_score = updates["ai_score"]
             if "ai_screening_summary" in updates:
                 entity.ai_screening_summary = updates["ai_screening_summary"]
+            if "candidate_brief" in updates:
+                entity.candidate_brief = updates["candidate_brief"]
             if "online_research_summary" in updates:
                 entity.online_research_summary = updates["online_research_summary"]
 
@@ -273,6 +276,7 @@ class PostgresApplicationRepository(ApplicationRepository):
             rejection_reason=entity.rejection_reason,
             ai_score=entity.ai_score,
             ai_screening_summary=entity.ai_screening_summary,
+            candidate_brief=entity.candidate_brief,
             online_research_summary=entity.online_research_summary,
             status_history=entity.status_history or [],
             reference_status=entity.reference_status,

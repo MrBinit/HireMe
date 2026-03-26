@@ -57,6 +57,7 @@ def decode_admin_access_token(
     token: str,
     secret: str,
     config: SecurityRuntimeConfig,
+    required_role: str | None = None,
 ) -> AdminPrincipal:
     """Decode and validate JWT, returning the authenticated admin principal."""
 
@@ -80,7 +81,8 @@ def decode_admin_access_token(
         raise TokenValidationError("token missing subject claim")
     if not isinstance(role, str) or not role.strip():
         raise TokenValidationError("token missing role claim")
-    if role != config.required_role:
+    expected_role = required_role or config.required_role
+    if role != expected_role:
         raise AuthorizationError("insufficient role")
     if not isinstance(expires_epoch, int):
         raise TokenValidationError("token missing exp claim")

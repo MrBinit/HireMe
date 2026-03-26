@@ -5,16 +5,28 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
+import anyio
 from app.core.runtime_config import get_runtime_config
 from app.core.settings import get_settings
 from app.infra.bedrock_runtime import BedrockRuntimeClient
 from app.infra.database import get_async_session_factory
-from app.infra.sqs_queue import SqsMessage, SqsQueueClient
+from app.infra.sqs_queue import (
+    SqsMessage,
+    SqsQueueClient,
+    SqsResearchQueuePublisher,
+)
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
 from app.repositories.postgres_job_opening_repository import PostgresJobOpeningRepository
 from app.services.candidate_evaluation_service import CandidateEvaluationService
+from app.services.research_queue import (
+    CandidateResearchEnrichmentJob,
+    NoopResearchQueuePublisher,
+    ResearchQueuePublishError,
+    ResearchQueuePublisher,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +44,11 @@ class SqsEvaluationWorker:
         queue_client: SqsQueueClient,
         evaluator: CandidateEvaluationService,
         application_repository: PostgresApplicationRepository,
+        research_queue_publisher: ResearchQueuePublisher,
+        research_queue_enabled: bool,
+        research_target_statuses: set[str],
+        research_enqueue_timeout_seconds: float,
+        ai_score_threshold: float,
         max_in_flight: int,
         receive_batch_size: int,
         receive_wait_seconds: int,
@@ -42,6 +59,11 @@ class SqsEvaluationWorker:
         self._queue_client = queue_client
         self._evaluator = evaluator
         self._application_repository = application_repository
+        self._research_queue_publisher = research_queue_publisher
+        self._research_queue_enabled = bool(research_queue_enabled)
+        self._research_target_statuses = set(research_target_statuses)
+        self._research_enqueue_timeout_seconds = max(0.1, research_enqueue_timeout_seconds)
+        self._ai_score_threshold = float(ai_score_threshold)
         self._max_in_flight = max(1, max_in_flight)
         self._receive_batch_size = max(1, min(receive_batch_size, 10))
         self._receive_wait_seconds = max(0, min(receive_wait_seconds, 20))
@@ -111,15 +133,17 @@ class SqsEvaluationWorker:
         try:
             evaluation = await self._evaluator.evaluate_application(application_id=application_id)
             summary = CandidateEvaluationService.format_evaluation_summary(evaluation)
+            evaluation_score = float(evaluation.score)
             updates: dict[str, object] = {
-                "ai_score": float(evaluation.score),
+                "ai_score": evaluation_score,
                 "ai_screening_summary": summary,
                 "evaluation_status": "completed",
             }
-            if float(evaluation.score) < float(runtime_config.application.ai_score_threshold):
+            if evaluation_score < float(runtime_config.application.ai_score_threshold):
                 updates["applicant_status"] = "rejected"
                 updates["rejection_reason"] = runtime_config.application.ai_score_fail_reason
             else:
+                updates["applicant_status"] = "shortlisted"
                 updates["rejection_reason"] = None
 
             updated = await self._application_repository.update_admin_review(
@@ -130,6 +154,15 @@ class SqsEvaluationWorker:
                 logger.warning(
                     "candidate not found while persisting evaluation application_id=%s",
                     application_id,
+                )
+            elif evaluation_score >= self._ai_score_threshold:
+                await self._enqueue_research_if_eligible(application_id)
+            else:
+                logger.info(
+                    "evaluation worker application_id=%s research enqueue skipped ai_score=%s threshold=%s",
+                    application_id,
+                    evaluation_score,
+                    self._ai_score_threshold,
                 )
         except Exception:
             await self._application_repository.update_admin_review(
@@ -145,6 +178,68 @@ class SqsEvaluationWorker:
             return
 
         await self._safe_delete(message)
+
+    async def _enqueue_research_if_eligible(self, application_id: UUID) -> None:
+        """Queue research enrichment only after successful AI evaluation threshold pass."""
+
+        if not self._research_queue_enabled:
+            return
+
+        candidate = await self._application_repository.get_by_id(application_id)
+        if candidate is None:
+            logger.warning(
+                "evaluation worker application_id=%s missing while checking research enqueue",
+                application_id,
+            )
+            return
+        if candidate.evaluation_status != "completed":
+            logger.info(
+                "evaluation worker application_id=%s research enqueue skipped evaluation_status=%s",
+                application_id,
+                candidate.evaluation_status,
+            )
+            return
+        if candidate.ai_score is None or float(candidate.ai_score) < self._ai_score_threshold:
+            logger.info(
+                "evaluation worker application_id=%s research enqueue skipped ai_score=%s threshold=%s",
+                application_id,
+                candidate.ai_score,
+                self._ai_score_threshold,
+            )
+            return
+        if candidate.online_research_summary:
+            logger.info(
+                "evaluation worker application_id=%s research enqueue skipped existing_summary=true",
+                application_id,
+            )
+            return
+        if candidate.applicant_status not in self._research_target_statuses:
+            logger.info(
+                "evaluation worker application_id=%s research enqueue skipped status=%s allowed=%s",
+                application_id,
+                candidate.applicant_status,
+                sorted(self._research_target_statuses),
+            )
+            return
+
+        job = CandidateResearchEnrichmentJob(
+            application_id=application_id,
+            queued_at=datetime.now(tz=timezone.utc),
+        )
+        try:
+            with anyio.fail_after(self._research_enqueue_timeout_seconds):
+                await self._research_queue_publisher.publish(job)
+            logger.info("evaluation worker application_id=%s research job queued", application_id)
+        except (ResearchQueuePublishError, TimeoutError):
+            logger.exception(
+                "evaluation worker application_id=%s failed to queue research job",
+                application_id,
+            )
+        except Exception:
+            logger.exception(
+                "evaluation worker application_id=%s unexpected research enqueue failure",
+                application_id,
+            )
 
     async def _safe_delete(self, message: SqsMessage) -> None:
         """Delete message and log failures without crashing worker loop."""
@@ -211,10 +306,35 @@ async def _run_worker() -> None:
         region=runtime_config.evaluation.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
+
+    enrichment_config = runtime_config.research.enrichment
+    research_queue_enabled = (
+        runtime_config.research.enabled
+        and enrichment_config.use_queue
+        and enrichment_config.provider == "sqs"
+        and bool(settings.sqs_research_queue_url)
+    )
+    research_queue_publisher: ResearchQueuePublisher = NoopResearchQueuePublisher()
+    if research_queue_enabled and settings.sqs_research_queue_url:
+        research_queue_publisher = SqsResearchQueuePublisher(
+            queue_url=settings.sqs_research_queue_url,
+            region=enrichment_config.region,
+            endpoint_url=settings.sqs_endpoint_url,
+        )
+    elif runtime_config.research.enabled and enrichment_config.use_queue:
+        logger.warning(
+            "research queue requested but unavailable; evaluation worker cannot auto-queue enrichment"
+        )
+
     worker = SqsEvaluationWorker(
         queue_client=queue_client,
         evaluator=evaluator,
         application_repository=application_repository,
+        research_queue_publisher=research_queue_publisher,
+        research_queue_enabled=research_queue_enabled,
+        research_target_statuses=set(enrichment_config.target_statuses),
+        research_enqueue_timeout_seconds=enrichment_config.enqueue_timeout_seconds,
+        ai_score_threshold=runtime_config.application.ai_score_threshold,
         max_in_flight=runtime_config.evaluation.max_in_flight_per_worker,
         receive_batch_size=runtime_config.evaluation.receive_batch_size,
         receive_wait_seconds=runtime_config.evaluation.receive_wait_seconds,

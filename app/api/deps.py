@@ -21,6 +21,7 @@ from app.infra.s3_store import S3ObjectStore
 from app.infra.smtp_email_sender import SmtpEmailSender
 from app.infra.sqs_queue import SqsParseQueuePublisher
 from app.infra.sqs_queue import SqsEvaluationQueuePublisher
+from app.infra.sqs_queue import SqsResearchQueuePublisher
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.job_opening_repository import JobOpeningRepository
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
@@ -35,6 +36,10 @@ from app.services.parse_queue import NoopParseQueuePublisher, ParseQueuePublishe
 from app.services.evaluation_queue import (
     EvaluationQueuePublisher,
     NoopEvaluationQueuePublisher,
+)
+from app.services.research_queue import (
+    NoopResearchQueuePublisher,
+    ResearchQueuePublisher,
 )
 from app.services.reference_service import ReferenceService
 from app.services.resume_storage import ResumeStorage, S3ResumeStorage
@@ -141,6 +146,31 @@ def get_evaluation_queue_publisher() -> EvaluationQueuePublisher:
     return SqsEvaluationQueuePublisher(
         queue_url=settings.sqs_evaluation_queue_url,
         region=runtime_config.evaluation.region,
+        endpoint_url=settings.sqs_endpoint_url,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_research_queue_publisher() -> ResearchQueuePublisher:
+    """Return research queue publisher based on runtime config and env."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    enrichment = runtime_config.research.enrichment
+
+    if not enrichment.use_queue:
+        return NoopResearchQueuePublisher()
+    if enrichment.provider != "sqs":
+        return NoopResearchQueuePublisher()
+    if not settings.sqs_research_queue_url:
+        raise RuntimeError(
+            "SQS_RESEARCH_QUEUE_URL is required when "
+            "research.enrichment.use_queue=true and provider=sqs"
+        )
+
+    return SqsResearchQueuePublisher(
+        queue_url=settings.sqs_research_queue_url,
+        region=enrichment.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
 
@@ -282,6 +312,12 @@ def get_evaluation_queue_publisher_dep() -> EvaluationQueuePublisher:
     return get_evaluation_queue_publisher()
 
 
+def get_research_queue_publisher_dep() -> ResearchQueuePublisher:
+    """FastAPI dependency wrapper for research queue publisher."""
+
+    return get_research_queue_publisher()
+
+
 @lru_cache(maxsize=1)
 def get_admin_auth_service() -> AdminAuthService:
     """Return admin auth service configured from env and runtime security settings."""
@@ -294,6 +330,25 @@ def get_admin_auth_service() -> AdminAuthService:
         admin_password_hash=settings.admin_password_hash,
         jwt_secret=settings.admin_jwt_secret,
         security_config=runtime_config.security,
+        auth_role=runtime_config.security.required_role,
+        auth_label="admin",
+    )
+
+
+@lru_cache(maxsize=1)
+def get_referee_auth_service() -> AdminAuthService:
+    """Return referee auth service configured from env and runtime security settings."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    return AdminAuthService(
+        admin_username=settings.referee_username,
+        admin_password=settings.referee_password,
+        admin_password_hash=settings.referee_password_hash,
+        jwt_secret=settings.admin_jwt_secret,
+        security_config=runtime_config.security,
+        auth_role="referee",
+        auth_label="referee",
     )
 
 
@@ -301,6 +356,12 @@ def get_admin_auth_service_dep() -> AdminAuthService:
     """FastAPI dependency wrapper for admin auth service."""
 
     return get_admin_auth_service()
+
+
+def get_referee_auth_service_dep() -> AdminAuthService:
+    """FastAPI dependency wrapper for referee auth service."""
+
+    return get_referee_auth_service()
 
 
 def get_admin_principal(
@@ -337,6 +398,56 @@ def get_admin_principal(
             token=credentials.credentials,
             secret=settings.admin_jwt_secret,
             config=security_config,
+            required_role=security_config.required_role,
+        )
+    except TokenValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+    except AuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+
+
+def get_referee_principal(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_admin_bearer_scheme)],
+) -> AdminPrincipal:
+    """Validate bearer token and return authenticated referee principal."""
+
+    runtime_config = get_runtime_config()
+    security_config = runtime_config.security
+
+    if not security_config.enabled:
+        return AdminPrincipal(
+            subject="local-dev-referee",
+            role="referee",
+            expires_at=None,
+        )
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="missing bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    settings = get_settings()
+    if not settings.admin_jwt_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="ADMIN_JWT_SECRET is not configured",
+        )
+
+    try:
+        return decode_admin_access_token(
+            token=credentials.credentials,
+            secret=settings.admin_jwt_secret,
+            config=security_config,
+            required_role="referee",
         )
     except TokenValidationError as exc:
         raise HTTPException(

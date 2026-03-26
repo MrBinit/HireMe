@@ -137,6 +137,7 @@ export default function AdminDashboardPage() {
 
     const payload = {
       role_title: String(formData.get("role_title") || "").trim(),
+      manager_email: String(formData.get("manager_email") || "").trim(),
       team: String(formData.get("team") || "").trim(),
       location: String(formData.get("location") || "").trim(),
       experience_level: String(formData.get("experience_level") || "").trim().toLowerCase(),
@@ -235,7 +236,7 @@ export default function AdminDashboardPage() {
 
   return (
     <main className="stack">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="page-head">
         <h1>Admin Dashboard</h1>
         <button className="secondary" onClick={onLogout} type="button">
           Logout
@@ -271,6 +272,10 @@ export default function AdminDashboardPage() {
             <label>
               Team
               <input name="team" required />
+            </label>
+            <label>
+              Manager Email
+              <input name="manager_email" type="email" required />
             </label>
             <label>
               Location (remote/onsite or city)
@@ -319,6 +324,7 @@ export default function AdminDashboardPage() {
             <thead>
               <tr>
                 <th>Role</th>
+                <th>Manager</th>
                 <th>Status</th>
                 <th>Window</th>
                 <th>Actions</th>
@@ -328,6 +334,7 @@ export default function AdminDashboardPage() {
               {openings.map((opening) => (
                 <tr key={opening.id}>
                   <td>{opening.role_title}</td>
+                  <td>{opening.manager_email || "-"}</td>
                   <td>{opening.status}</td>
                   <td>
                     {new Date(opening.application_open_at).toLocaleDateString()} -{" "}

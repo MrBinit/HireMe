@@ -98,6 +98,7 @@ def _job_opening_record(job_opening_id) -> JobOpeningRecord:
     return JobOpeningRecord(
         id=job_opening_id,
         role_title="Backend Engineer",
+        manager_email="manager@example.com",
         team="Platform",
         location="remote",
         experience_level="mid",

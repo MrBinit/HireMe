@@ -35,6 +35,8 @@ class AdminAuthService:
         admin_password_hash: str | None,
         jwt_secret: str | None,
         security_config: SecurityRuntimeConfig,
+        auth_role: str | None = None,
+        auth_label: str = "admin",
     ):
         """Store auth settings and security token config."""
 
@@ -43,6 +45,8 @@ class AdminAuthService:
         self._admin_password_hash = admin_password_hash
         self._jwt_secret = jwt_secret
         self._security_config = security_config
+        self._auth_role = auth_role or security_config.required_role
+        self._auth_label = auth_label.strip().lower() or "admin"
 
     def login(self, payload: AdminLoginPayload) -> AdminAccessTokenResponse:
         """Validate admin credentials and return signed bearer token."""
@@ -51,12 +55,12 @@ class AdminAuthService:
         submitted_username = payload.username.strip()
 
         if not expected_username:
-            raise AdminAuthConfigurationError("ADMIN_USERNAME is not configured")
+            raise AdminAuthConfigurationError(f"{self._auth_label.upper()}_USERNAME is not configured")
         if not self._jwt_secret:
             raise AdminAuthConfigurationError("ADMIN_JWT_SECRET is not configured")
         if not (self._admin_password_hash or self._admin_password):
             raise AdminAuthConfigurationError(
-                "Configure ADMIN_PASSWORD_HASH or ADMIN_PASSWORD for admin login"
+                f"Configure {self._auth_label.upper()}_PASSWORD_HASH or {self._auth_label.upper()}_PASSWORD"
             )
 
         username_match = secrets.compare_digest(
@@ -66,18 +70,19 @@ class AdminAuthService:
         password_match = self._verify_password(payload.password)
 
         if not (username_match and password_match):
-            raise AdminAuthError("invalid admin credentials")
+            raise AdminAuthError(f"invalid {self._auth_label} credentials")
 
         token = create_admin_access_token(
             subject=submitted_username,
             secret=self._jwt_secret,
             config=self._security_config,
-            role=self._security_config.required_role,
+            role=self._auth_role,
         )
         principal = decode_admin_access_token(
             token=token,
             secret=self._jwt_secret,
             config=self._security_config,
+            required_role=self._auth_role,
         )
         return AdminAccessTokenResponse(
             access_token=token,

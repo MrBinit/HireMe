@@ -144,6 +144,7 @@ class ApplicationService:
             rejection_reason=None,
             ai_score=None,
             ai_screening_summary=None,
+            candidate_brief=None,
             online_research_summary=None,
             status_history=[
                 StatusHistoryEntry(
@@ -323,11 +324,11 @@ class ApplicationService:
             if float(ai_score) < float(self._config.ai_score_threshold):
                 updates.setdefault("applicant_status", "rejected")
                 updates.setdefault("rejection_reason", self._config.ai_score_fail_reason)
-            elif "rejection_reason" not in updates and updates.get("applicant_status") not in {
-                "rejected",
-                None,
-            }:
-                updates["rejection_reason"] = None
+            else:
+                updates.setdefault("applicant_status", "shortlisted")
+                is_not_rejected = updates.get("applicant_status") != "rejected"
+                if is_not_rejected and "rejection_reason" not in updates:
+                    updates["rejection_reason"] = None
 
         updated = await self._repository.update_admin_review(
             application_id=application_id,

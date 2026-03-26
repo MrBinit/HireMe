@@ -19,6 +19,7 @@ export type EvaluationStatus = "queued" | "in_progress" | "completed" | "failed"
 export interface JobOpening {
   id: string;
   role_title: string;
+  manager_email?: string | null;
   team: string;
   location: string;
   experience_level: string;
@@ -59,8 +60,8 @@ export interface CandidateRecord {
   job_opening_id: string;
   full_name: string;
   email: string;
-  linkedin_url?: string | null;
-  portfolio_url: string;
+  linkedin_url: string | null;
+  portfolio_url?: string | null;
   github_url: string;
   twitter_url?: string | null;
   role_selection: string;
@@ -70,11 +71,45 @@ export interface CandidateRecord {
   applicant_status: ApplicantStatus;
   ai_score?: number | null;
   ai_screening_summary?: string | null;
+  candidate_brief?: string | null;
   online_research_summary?: string | null;
   status_history: StatusHistoryEntry[];
   reference_status: boolean;
   resume: ResumeMeta;
   created_at: string;
+}
+
+export interface PublicApplicationStatus {
+  application_id: string;
+  applicant_status: ApplicantStatus;
+  parse_status: "pending" | "in_progress" | "completed" | "failed";
+  evaluation_status?: EvaluationStatus | null;
+  ai_score?: number | null;
+  role_selection: string;
+  submitted_at: string;
+  research_ready: boolean;
+}
+
+export interface ReferenceRecord {
+  id: string;
+  application_id: string;
+  candidate_email: string;
+  referee_name: string;
+  referee_email?: string | null;
+  referee_phone?: string | null;
+  referee_linkedin_url?: string | null;
+  referee_company?: string | null;
+  referee_position?: string | null;
+  relationship?: string | null;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface ReferenceListResponse {
+  items: ReferenceRecord[];
+  total: number;
+  offset: number;
+  limit: number;
 }
 
 export interface ApiErrorPayload {

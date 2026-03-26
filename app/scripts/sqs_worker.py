@@ -5,16 +5,29 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
+import anyio
 from app.api.deps import get_email_sender
 from app.core.runtime_config import get_runtime_config
 from app.core.settings import get_settings
 from app.infra.database import get_async_session_factory
 from app.infra.s3_store import S3ObjectStore
-from app.infra.sqs_queue import SqsMessage, SqsQueueClient
+from app.infra.sqs_queue import (
+    SqsEvaluationQueuePublisher,
+    SqsMessage,
+    SqsQueueClient,
+)
+from app.repositories.application_repository import ApplicationRepository
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
 from app.repositories.postgres_job_opening_repository import PostgresJobOpeningRepository
+from app.services.evaluation_queue import (
+    CandidateEvaluationJob,
+    EvaluationQueuePublishError,
+    EvaluationQueuePublisher,
+    NoopEvaluationQueuePublisher,
+)
 from app.services.parse_processor import ResumeParseProcessor
 from app.services.resume_extractor import LangChainResumeExtractor
 from app.services.resume_structured_extractor import ResumeStructuredExtractor
@@ -34,6 +47,11 @@ class SqsParseWorker:
         *,
         queue_client: SqsQueueClient,
         parse_processor: ResumeParseProcessor,
+        application_repository: ApplicationRepository,
+        evaluation_queue_publisher: EvaluationQueuePublisher,
+        evaluation_queue_enabled: bool,
+        evaluation_target_statuses: set[str],
+        evaluation_enqueue_timeout_seconds: float,
         max_in_flight: int,
         receive_batch_size: int,
         receive_wait_seconds: int,
@@ -43,6 +61,11 @@ class SqsParseWorker:
 
         self._queue_client = queue_client
         self._parse_processor = parse_processor
+        self._application_repository = application_repository
+        self._evaluation_queue_publisher = evaluation_queue_publisher
+        self._evaluation_queue_enabled = bool(evaluation_queue_enabled)
+        self._evaluation_target_statuses = set(evaluation_target_statuses)
+        self._evaluation_enqueue_timeout_seconds = max(0.1, evaluation_enqueue_timeout_seconds)
         self._max_in_flight = max(1, max_in_flight)
         self._receive_batch_size = max(1, min(receive_batch_size, 10))
         self._receive_wait_seconds = max(0, min(receive_wait_seconds, 20))
@@ -107,12 +130,70 @@ class SqsParseWorker:
             logger.exception("parse failed for application_id=%s", application_id)
             return
 
-        if not exists:
+        if exists:
+            logger.info("parse worker application_id=%s parse done", application_id)
+            await self._enqueue_evaluation_if_eligible(application_id)
+        else:
             logger.warning(
                 "application not found for queued message application_id=%s", application_id
             )
 
         await self._safe_delete(message)
+
+    async def _enqueue_evaluation_if_eligible(self, application_id: UUID) -> None:
+        """Queue AI evaluation after parse when candidate is eligible."""
+
+        if not self._evaluation_queue_enabled:
+            return
+
+        candidate = await self._application_repository.get_by_id(application_id)
+        if candidate is None:
+            logger.warning(
+                "parse worker application_id=%s missing while checking evaluation enqueue",
+                application_id,
+            )
+            return
+        if candidate.parse_status != "completed":
+            logger.info(
+                "parse worker application_id=%s evaluation enqueue skipped parse_status=%s",
+                application_id,
+                candidate.parse_status,
+            )
+            return
+        if candidate.evaluation_status in {"queued", "in_progress", "completed"}:
+            logger.info(
+                "parse worker application_id=%s evaluation enqueue skipped evaluation_status=%s",
+                application_id,
+                candidate.evaluation_status,
+            )
+            return
+        if candidate.applicant_status not in self._evaluation_target_statuses:
+            logger.info(
+                "parse worker application_id=%s evaluation enqueue skipped status=%s allowed=%s",
+                application_id,
+                candidate.applicant_status,
+                sorted(self._evaluation_target_statuses),
+            )
+            return
+
+        job = CandidateEvaluationJob(
+            application_id=application_id,
+            queued_at=datetime.now(tz=timezone.utc),
+        )
+        try:
+            with anyio.fail_after(self._evaluation_enqueue_timeout_seconds):
+                await self._evaluation_queue_publisher.publish(job)
+            logger.info("parse worker application_id=%s evaluation job queued", application_id)
+        except (EvaluationQueuePublishError, TimeoutError):
+            logger.exception(
+                "parse worker application_id=%s failed to queue evaluation job",
+                application_id,
+            )
+        except Exception:
+            logger.exception(
+                "parse worker application_id=%s unexpected evaluation enqueue failure",
+                application_id,
+            )
 
     async def _safe_delete(self, message: SqsMessage) -> None:
         """Delete message and log failures without crashing worker loop."""
@@ -178,6 +259,25 @@ async def _run_worker() -> None:
         notification_config=runtime_config.notification,
         email_sender=get_email_sender(),
     )
+
+    evaluation_config = runtime_config.evaluation
+    evaluation_queue_enabled = (
+        evaluation_config.use_queue
+        and evaluation_config.provider == "sqs"
+        and bool(settings.sqs_evaluation_queue_url)
+    )
+    evaluation_queue_publisher: EvaluationQueuePublisher = NoopEvaluationQueuePublisher()
+    if evaluation_queue_enabled and settings.sqs_evaluation_queue_url:
+        evaluation_queue_publisher = SqsEvaluationQueuePublisher(
+            queue_url=settings.sqs_evaluation_queue_url,
+            region=evaluation_config.region,
+            endpoint_url=settings.sqs_endpoint_url,
+        )
+    elif evaluation_config.use_queue:
+        logger.warning(
+            "evaluation queue requested but unavailable; auto AI evaluation from parse worker is disabled"
+        )
+
     queue_client = SqsQueueClient(
         queue_url=settings.sqs_parse_queue_url,
         region=runtime_config.parse.region,
@@ -186,6 +286,11 @@ async def _run_worker() -> None:
     worker = SqsParseWorker(
         queue_client=queue_client,
         parse_processor=processor,
+        application_repository=repository,
+        evaluation_queue_publisher=evaluation_queue_publisher,
+        evaluation_queue_enabled=evaluation_queue_enabled,
+        evaluation_target_statuses=set(evaluation_config.target_statuses),
+        evaluation_enqueue_timeout_seconds=evaluation_config.enqueue_timeout_seconds,
         max_in_flight=runtime_config.parse.max_in_flight_per_worker,
         receive_batch_size=runtime_config.parse.receive_batch_size,
         receive_wait_seconds=runtime_config.parse.receive_wait_seconds,

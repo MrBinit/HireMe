@@ -46,3 +46,12 @@ class CandidateEvaluationQueueResponse(BaseModel):
     queued: bool
     queued_at: datetime
     queue_name: str
+
+
+class CandidateResearchQueueResponse(BaseModel):
+    """Response payload for queued asynchronous candidate research enrichment."""
+
+    application_id: UUID
+    queued: bool
+    queued_at: datetime
+    queue_name: str

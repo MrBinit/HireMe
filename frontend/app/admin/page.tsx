@@ -44,7 +44,10 @@ export default function AdminLoginPage() {
 
   return (
     <main className="stack">
-      <h1>Admin Login</h1>
+      <div className="page-head">
+        <h1>Admin Login</h1>
+        <span className="badge">Secure access</span>
+      </div>
       <section className="panel stack">
         <form className="stack" onSubmit={onSubmit}>
           <label>

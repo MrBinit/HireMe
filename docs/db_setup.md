@@ -5,6 +5,7 @@ This document covers data/storage infrastructure for:
 - PostgreSQL (metadata)
 - S3 (resume files)
 - SQS (parse queue + LLM evaluation queue)
+- shortlisted research enrichment storage/output
 
 ## Storage Split
 - PostgreSQL stores job openings and applicant metadata.
@@ -117,6 +118,27 @@ This document covers data/storage infrastructure for:
 9. Evaluation worker updates `evaluation_status` (`in_progress -> completed|failed`) and persists AI outputs.
 10. AI fail threshold handling:
    - fail threshold -> `rejection_reason=Candidate did not meet the AI score threshold.`
+11. AI pass threshold handling:
+   - pass threshold -> `applicant_status=shortlisted`
+12. Optional online-research enrichment script updates:
+   - `linkedin_url` (if missing and discovered)
+   - `twitter_url` (if missing and discovered)
+   - `online_research_summary`
+13. Strict shortlisted research enrichment (`enrich_shortlisted_llm_profiles`) writes compact structured JSON to `online_research_summary`:
+   - `extractors` (`linkedin`, `github`, `twitter` mock block)
+   - `cross_checks` (`resume_vs_linkedin`, `resume_vs_github`)
+   - `issue_flags` (`experience_mismatch`, `missing_projects`, `skill_differences`)
+   - `llm_analysis` (primary/fallback model output)
+   - `brief` (3-5 sentence manager summary)
+14. Optional async queue-backed research enrichment:
+   - enqueue endpoint: `POST /api/v1/admin/candidates/{id}/research/queue`
+   - worker: `venv/bin/python -m app.scripts.sqs_research_enrichment_worker`
+   - queue URL env: `SQS_RESEARCH_QUEUE_URL`
+
+## Research Enrichment Queue Note
+- Queue mode is implemented for strict enrichment via SQS.
+- Batch/cron execution is still supported for backfill runs.
+- Worker-level concurrency is controlled by `research.enrichment.*` queue settings.
 
 ## High-Traffic Note
 - PgBouncer is not configured in this repository.

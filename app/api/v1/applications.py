@@ -14,6 +14,7 @@ from app.schemas.application import (
     ApplicationCreatePayload,
     ApplicationListResponse,
     ApplicationRecord,
+    PublicApplicationStatusResponse,
 )
 from app.services.application_service import ApplicationService
 
@@ -33,8 +34,8 @@ async def list_roles(
 async def submit_application(
     full_name: str = Form(...),
     email: str = Form(...),
-    linkedin_url: str | None = Form(default=None),
-    portfolio_url: str = Form(...),
+    linkedin_url: str = Form(...),
+    portfolio_url: str | None = Form(default=None),
     github_url: str = Form(...),
     twitter_url: str | None = Form(default=None),
     role_selection: str = Form(...),
@@ -46,8 +47,8 @@ async def submit_application(
     raw_payload: dict[str, Any] = {
         "full_name": full_name,
         "email": email,
-        "linkedin_url": linkedin_url or None,
-        "portfolio_url": portfolio_url,
+        "linkedin_url": linkedin_url,
+        "portfolio_url": portfolio_url or None,
         "github_url": github_url,
         "twitter_url": twitter_url or None,
         "role_selection": role_selection,
@@ -62,6 +63,42 @@ async def submit_application(
         ) from exc
 
     return await service.submit(payload=payload, resume=resume)
+
+
+@router.get(
+    "/applications/{application_id}/status",
+    response_model=PublicApplicationStatusResponse,
+)
+async def get_public_application_status(
+    application_id: UUID,
+    email: str = Query(...),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> PublicApplicationStatusResponse:
+    """Return applicant status by application id + applicant email."""
+
+    record = await service.get_by_id(application_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+
+    if str(record.email).strip().casefold() != email.strip().casefold():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+
+    return PublicApplicationStatusResponse(
+        application_id=record.id,
+        applicant_status=record.applicant_status,
+        parse_status=record.parse_status,
+        evaluation_status=record.evaluation_status,
+        ai_score=record.ai_score,
+        role_selection=record.role_selection,
+        submitted_at=record.created_at,
+        research_ready=bool(record.online_research_summary),
+    )
 
 
 @router.get("/applications", response_model=ApplicationListResponse)

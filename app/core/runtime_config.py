@@ -262,10 +262,210 @@ class EvaluationRuntimeConfig(BaseModel):
     receive_wait_seconds: int = 20
     visibility_timeout_seconds: int = 300
     max_receive_count: int = 5
+    target_statuses: list[str] = Field(
+        default_factory=lambda: [
+            "screened",
+            "shortlisted",
+            "in_interview",
+            "offer",
+            "sent_to_manager",
+        ]
+    )
     prompt_template: str = ""
     summary_prompt_template: str = ""
     max_reason_chars: int = 500
     max_work_summary_chars: int = 1500
+
+
+class ResearchRuntimeConfig(BaseModel):
+    """Runtime config for external web research enrichment."""
+
+    class LinkedInExtractRuntimeConfig(BaseModel):
+        """Config for LinkedIn-only extraction and resume cross-reference."""
+
+        query_templates: list[str] = Field(
+            default_factory=lambda: [
+                "site:linkedin.com/in {linkedin_handle}",
+                '"{linkedin_url}"',
+                'site:linkedin.com/in "{full_name}" "{role_selection}"',
+            ]
+        )
+        results_per_query: int = 8
+        max_linkedin_hits: int = 12
+        max_evidence_lines: int = 10
+        min_skill_token_length: int = 3
+        min_position_token_length: int = 3
+        max_output_skills: int = 30
+        max_output_employers: int = 20
+        max_output_positions: int = 20
+
+    class LinkedInTextExtractRuntimeConfig(BaseModel):
+        """Config for parsing pasted LinkedIn profile text into structured sections."""
+
+        section_headings: dict[str, list[str]] = Field(
+            default_factory=lambda: {
+                "experience": ["experience"],
+                "education": ["education"],
+                "licenses_and_certifications": [
+                    "licenses & certifications",
+                    "licenses and certifications",
+                ],
+                "projects": ["projects"],
+                "skills": ["skills"],
+            }
+        )
+        stop_headings: list[str] = Field(
+            default_factory=lambda: [
+                "interests",
+                "top voices",
+                "companies",
+                "groups",
+                "newsletters",
+                "schools",
+                "profile language",
+                "public profile & url",
+                "who your viewers also viewed",
+                "people you may know",
+                "you might like",
+            ]
+        )
+        ignore_line_patterns: list[str] = Field(
+            default_factory=lambda: [
+                r"^\s*show all\s*$",
+                r"^\s*show credential\s*$",
+                r"^\s*message\s*$",
+                r"^\s*connect\s*$",
+                r"^\s*follow\s*$",
+                r"^\s*view\s*$",
+                r"^\s*private to you\s*$",
+                r".*\blogo\s*$",
+                r"^\s*thumbnail for\s+.*$",
+                r".*someone at .*",
+                r".*someone in .*",
+                r".*followers?$",
+            ]
+        )
+        bullet_prefixes: list[str] = Field(default_factory=lambda: ["•", "-", "*"])
+        month_names: list[str] = Field(
+            default_factory=lambda: [
+                "Jan",
+                "Feb",
+                "Mar",
+                "Apr",
+                "May",
+                "Jun",
+                "Jul",
+                "Aug",
+                "Sep",
+                "Oct",
+                "Nov",
+                "Dec",
+            ]
+        )
+        max_items_per_section: int = 100
+
+    class GithubRuntimeConfig(BaseModel):
+        """Config for GitHub profile enrichment via GitHub REST API."""
+
+        api_base_url: str = "https://api.github.com"
+        repos_per_user: int = 10
+        max_repo_items: int = 30
+        max_topics_per_repo: int = 5
+        max_repos_in_summary: int = 5
+        max_primary_languages: int = 5
+        max_repo_description_chars: int = 220
+        activity_active_within_days: int = 180
+        request_timeout_seconds: float = 12.0
+        user_agent: str = "hireme-candidate-research/1.0"
+
+    class EnrichmentRuntimeConfig(BaseModel):
+        """Config for shortlisted-candidate enrichment output shaping."""
+
+        use_queue: bool = True
+        provider: Literal["sqs", "redis", "local"] = "sqs"
+        region: str = "us-east-1"
+        queue_name: str = "hireme-candidate-research-enrichment"
+        enqueue_timeout_seconds: float = 2.0
+        worker_concurrency: int = 8
+        max_in_flight_per_worker: int = 8
+        receive_batch_size: int = 10
+        receive_wait_seconds: int = 20
+        visibility_timeout_seconds: int = 300
+        max_receive_count: int = 5
+        target_statuses: list[str] = Field(default_factory=lambda: ["shortlisted"])
+        max_candidates_per_run: int = 200
+        max_profile_hits: int = 6
+        max_twitter_hits: int = 6
+        max_portfolio_hits: int = 6
+        max_discrepancies: int = 8
+        max_brief_sentences: int = 5
+        min_brief_sentences: int = 3
+        llm_analysis_enabled: bool = True
+        llm_max_tokens: int = 900
+        llm_prompt_template: str = (
+            "You are a hiring research analyst.\n"
+            "Use ONLY the provided resume and extracted profile JSON.\n\n"
+            "TASKS:\n"
+            "1) Cross-reference resume vs online profiles.\n"
+            "2) Detect factual discrepancies or missing corroboration.\n"
+            "3) Write a 3-5 sentence hiring brief.\n\n"
+            "RULES:\n"
+            "- Do not hallucinate any facts.\n"
+            "- If evidence is missing, say 'insufficient public evidence'.\n"
+            "- Keep findings concise and actionable.\n"
+            "- Return strict JSON only.\n\n"
+            "CANDIDATE: {candidate_name}\n"
+            "ROLE: {role_selection}\n"
+            "RESUME_JSON: {resume_json}\n"
+            "EXTRACTED_JSON: {extracted_json}\n\n"
+            "OUTPUT JSON SCHEMA:\n"
+            "{\n"
+            '  "cross_reference": {\n'
+            '    "employment_alignment": ["..."],\n'
+            '    "skills_alignment": ["..."],\n'
+            '    "project_alignment": ["..."]\n'
+            "  },\n"
+            '  "discrepancies": ["..."],\n'
+            '  "summary": "3-5 sentence candidate brief"\n'
+            "}"
+        )
+        max_research_json_chars: int = 3800
+
+    enabled: bool = False
+    provider: Literal["serpapi"] = "serpapi"
+    google_search_url: str = "https://serpapi.com/search.json"
+    engine: str = "google"
+    always_web_retrieval_enabled: bool = True
+    query_planner_use_llm: bool = False
+    retrieval_loop_use_llm: bool = False
+    request_timeout_seconds: float = 15.0
+    max_concurrency: int = 8
+    results_per_query: int = 5
+    max_summary_chars: int = 4000
+    only_when_missing_urls: bool = True
+    target_statuses: list[str] = Field(
+        default_factory=lambda: [
+            "screened",
+            "shortlisted",
+            "in_interview",
+            "offer",
+            "sent_to_manager",
+        ]
+    )
+    linkedin_query_template: str = 'site:linkedin.com/in "{full_name}" "{role_selection}"'
+    twitter_query_template: str = (
+        '(site:x.com OR site:twitter.com) "{full_name}" "{role_selection}"'
+    )
+    profile_query_template: str = '"{full_name}" "{role_selection}"'
+    links_limit_per_query: int = 3
+    linkedin_extract: LinkedInExtractRuntimeConfig = Field(
+        default_factory=LinkedInExtractRuntimeConfig
+    )
+    linkedin_text_extract: LinkedInTextExtractRuntimeConfig = Field(
+        default_factory=LinkedInTextExtractRuntimeConfig
+    )
+    github: GithubRuntimeConfig = Field(default_factory=GithubRuntimeConfig)
+    enrichment: EnrichmentRuntimeConfig = Field(default_factory=EnrichmentRuntimeConfig)
 
 
 class NotificationRuntimeConfig(BaseModel):
@@ -391,6 +591,7 @@ class RuntimeConfig(BaseModel):
     parse: ParseRuntimeConfig = Field(default_factory=ParseRuntimeConfig)
     bedrock: BedrockRuntimeConfig = Field(default_factory=BedrockRuntimeConfig)
     evaluation: EvaluationRuntimeConfig = Field(default_factory=EvaluationRuntimeConfig)
+    research: ResearchRuntimeConfig = Field(default_factory=ResearchRuntimeConfig)
     notification: NotificationRuntimeConfig = Field(default_factory=NotificationRuntimeConfig)
     google_api: GoogleApiRuntimeConfig = Field(default_factory=GoogleApiRuntimeConfig)
     cors: CorsRuntimeConfig = Field(default_factory=CorsRuntimeConfig)
@@ -415,6 +616,7 @@ def get_runtime_config() -> RuntimeConfig:
     s3_config_path = settings.s3_config_path
     bedrock_config_path = settings.bedrock_config_path
     evaluation_config_path = settings.evaluation_config_path
+    research_config_path = settings.research_config_path
 
     try:
         import yaml
@@ -441,6 +643,7 @@ def get_runtime_config() -> RuntimeConfig:
     raw_s3_config = _load_yaml(s3_config_path)
     raw_bedrock_config = _load_yaml(bedrock_config_path)
     raw_evaluation_config = _load_yaml(evaluation_config_path)
+    raw_research_config = _load_yaml(research_config_path)
 
     def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = dict(base)
@@ -493,5 +696,12 @@ def get_runtime_config() -> RuntimeConfig:
         )
     else:
         combined_config = _merge_dicts(combined_config, {"evaluation": raw_evaluation_config})
+    if "research" in raw_research_config and isinstance(raw_research_config["research"], dict):
+        combined_config = _merge_dicts(
+            combined_config,
+            {"research": raw_research_config["research"]},
+        )
+    else:
+        combined_config = _merge_dicts(combined_config, {"research": raw_research_config})
 
     return RuntimeConfig.model_validate(combined_config)

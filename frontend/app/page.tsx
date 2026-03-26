@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
 import { API_BASE, readApiError } from "../lib/api";
@@ -67,8 +66,14 @@ export default function CandidateApplyPage() {
       if (!response.ok) {
         const apiMessage = readApiError(payload, "Application submission failed");
         const limitMatch = apiMessage.match(/max allowed is\s+(\d+)\s+MB/i);
+        const duplicateMatch = /duplicate application/i.test(apiMessage);
         if (limitMatch) {
           throw new Error(`File size should be less than ${limitMatch[1]} MB.`);
+        }
+        if (duplicateMatch) {
+          throw new Error(
+            "You have already submitted an application for this role with this email.",
+          );
         }
         throw new Error(apiMessage);
       }
@@ -90,11 +95,9 @@ export default function CandidateApplyPage() {
 
   return (
     <main className="stack">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1>HireMe Candidate Application</h1>
-        <Link href="/admin" className="badge">
-          Admin Login
-        </Link>
+      <div className="page-head">
+        <h1>Candidate Application</h1>
+        <span className="badge">Fast submission</span>
       </div>
 
       <section className="panel stack">
@@ -117,13 +120,13 @@ export default function CandidateApplyPage() {
             </label>
 
             <label>
-              LinkedIn URL (optional)
-              <input name="linkedin_url" type="url" />
+              LinkedIn URL
+              <input name="linkedin_url" type="url" required />
             </label>
 
             <label>
-              Portfolio URL
-              <input name="portfolio_url" type="url" required />
+              Portfolio URL (optional)
+              <input name="portfolio_url" type="url" />
             </label>
 
             <label>
@@ -167,6 +170,7 @@ export default function CandidateApplyPage() {
           {submitState.type === "error" ? <p className="error">{submitState.message}</p> : null}
         </form>
       </section>
+
     </main>
   );
 }

@@ -28,8 +28,8 @@ class ApplicationCreatePayload(BaseModel):
 
     full_name: str = Field(min_length=2, max_length=120)
     email: EmailStr
-    linkedin_url: AnyHttpUrl | None = None
-    portfolio_url: AnyHttpUrl
+    linkedin_url: AnyHttpUrl
+    portfolio_url: AnyHttpUrl | None = None
     github_url: AnyHttpUrl
     twitter_url: AnyHttpUrl | None = None
     role_selection: str = Field(min_length=2, max_length=120)
@@ -62,7 +62,7 @@ class ApplicationRecord(BaseModel):
     full_name: str
     email: EmailStr
     linkedin_url: AnyHttpUrl | None = None
-    portfolio_url: AnyHttpUrl
+    portfolio_url: AnyHttpUrl | None = None
     github_url: AnyHttpUrl
     twitter_url: AnyHttpUrl | None = None
     role_selection: str
@@ -75,6 +75,7 @@ class ApplicationRecord(BaseModel):
     rejection_reason: str | None = None
     ai_score: float | None = None
     ai_screening_summary: str | None = None
+    candidate_brief: str | None = None
     online_research_summary: str | None = None
     status_history: list[StatusHistoryEntry] = Field(default_factory=list)
     reference_status: bool = False
@@ -101,6 +102,19 @@ class ResumeDownloadResponse(BaseModel):
     filename: str
 
 
+class PublicApplicationStatusResponse(BaseModel):
+    """Public status payload for applicant self-tracking after submission."""
+
+    application_id: UUID
+    applicant_status: ApplicantStatus
+    parse_status: ParseStatus
+    evaluation_status: EvaluationStatus | None = None
+    ai_score: float | None = None
+    role_selection: str
+    submitted_at: datetime
+    research_ready: bool = False
+
+
 class ApplicantStatusUpdatePayload(BaseModel):
     """Request payload for updating an applicant lifecycle status."""
 
@@ -115,5 +129,6 @@ class AdminCandidateReviewPayload(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
     ai_score: float | None = Field(default=None, ge=0.0, le=100.0)
     ai_screening_summary: str | None = Field(default=None, max_length=4000)
+    candidate_brief: str | None = Field(default=None, max_length=1500)
     online_research_summary: str | None = Field(default=None, max_length=4000)
     rejection_reason: str | None = Field(default=None, max_length=1000)

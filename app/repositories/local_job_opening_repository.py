@@ -138,6 +138,7 @@ class LocalJobOpeningRepository(JobOpeningRepository):
 
         normalized = dict(raw_record)
         normalized.setdefault("experience_range", "0-0 years")
+        normalized.setdefault("manager_email", "unknown@hireme.ai")
         created_at = normalized.get("created_at") or datetime.now(tz=timezone.utc).isoformat()
         normalized.setdefault("application_open_at", created_at)
         normalized.setdefault("application_close_at", "2100-01-01T00:00:00+00:00")

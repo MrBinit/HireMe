@@ -119,6 +119,12 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             await connection.execute(
                 text(
                     "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS candidate_brief VARCHAR(1500)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
                     "ADD COLUMN IF NOT EXISTS online_research_summary VARCHAR(4000)"
                 )
             )
@@ -161,6 +167,12 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             await connection.execute(
                 text(
                     "ALTER TABLE applicant_applications "
+                    "ALTER COLUMN portfolio_url DROP NOT NULL"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
                     "ALTER COLUMN applicant_status SET DEFAULT 'applied'"
                 )
             )
@@ -183,6 +195,26 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
                 text(
                     "ALTER TABLE job_openings "
                     "ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE job_openings "
+                    "ADD COLUMN IF NOT EXISTS manager_email VARCHAR(320) "
+                    "NOT NULL DEFAULT 'unknown@hireme.ai'"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE job_openings "
+                    "ALTER COLUMN manager_email SET DEFAULT 'unknown@hireme.ai'"
+                )
+            )
+            await connection.execute(
+                text(
+                    "UPDATE job_openings "
+                    "SET manager_email = 'unknown@hireme.ai' "
+                    "WHERE manager_email = 'unknown@hireme.local'"
                 )
             )
             await connection.execute(text("DROP INDEX IF EXISTS idx_applications_latest_position"))

@@ -38,7 +38,7 @@ class ApplicantApplication(Base):
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
     linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    portfolio_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    portfolio_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     github_url: Mapped[str] = mapped_column(String(500), nullable=False)
     twitter_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     role_selection: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -56,6 +56,7 @@ class ApplicantApplication(Base):
     parsed_search_text: Mapped[str | None] = mapped_column(String(8000), nullable=True)
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_screening_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    candidate_brief: Mapped[str | None] = mapped_column(String(1500), nullable=True)
     online_research_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     status_history: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     parse_status: Mapped[str] = mapped_column(

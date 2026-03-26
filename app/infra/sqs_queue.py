@@ -16,6 +16,11 @@ from app.services.evaluation_queue import (
     EvaluationQueuePublishError,
     EvaluationQueuePublisher,
 )
+from app.services.research_queue import (
+    CandidateResearchEnrichmentJob,
+    ResearchQueuePublishError,
+    ResearchQueuePublisher,
+)
 
 
 class SqsParseQueuePublisher(ParseQueuePublisher):
@@ -111,6 +116,54 @@ class SqsEvaluationQueuePublisher(EvaluationQueuePublisher):
 
         return {
             "event_type": "candidate_evaluation_requested",
+            "application_id": str(job.application_id),
+            "queued_at": job.queued_at.isoformat(),
+        }
+
+
+class SqsResearchQueuePublisher(ResearchQueuePublisher):
+    """Publish candidate research enrichment jobs to Amazon SQS."""
+
+    def __init__(
+        self,
+        *,
+        queue_url: str,
+        region: str,
+        endpoint_url: str | None = None,
+    ):
+        """Initialize SQS client with queue URL and region."""
+
+        self._queue_url = queue_url
+        self._client = boto3.client(
+            "sqs",
+            region_name=region,
+            endpoint_url=endpoint_url,
+        )
+
+    async def publish(self, job: CandidateResearchEnrichmentJob) -> None:
+        """Send one candidate research enrichment job to SQS."""
+
+        message_body = json.dumps(self._to_payload(job), default=str)
+
+        def _run() -> None:
+            self._client.send_message(
+                QueueUrl=self._queue_url,
+                MessageBody=message_body,
+            )
+
+        try:
+            await anyio.to_thread.run_sync(_run)
+        except (ClientError, BotoCoreError) as exc:
+            raise ResearchQueuePublishError(
+                "failed to publish candidate research enrichment job to SQS"
+            ) from exc
+
+    @staticmethod
+    def _to_payload(job: CandidateResearchEnrichmentJob) -> dict[str, Any]:
+        """Serialize candidate-research job into queue payload."""
+
+        return {
+            "event_type": "candidate_research_enrichment_requested",
             "application_id": str(job.application_id),
             "queued_at": job.queued_at.isoformat(),
         }

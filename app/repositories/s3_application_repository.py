@@ -228,6 +228,8 @@ class S3ApplicationRepository(ApplicationRepository):
             update_payload["ai_score"] = updates["ai_score"]
         if "ai_screening_summary" in updates:
             update_payload["ai_screening_summary"] = updates["ai_screening_summary"]
+        if "candidate_brief" in updates:
+            update_payload["candidate_brief"] = updates["candidate_brief"]
         if "online_research_summary" in updates:
             update_payload["online_research_summary"] = updates["online_research_summary"]
 

@@ -110,6 +110,7 @@ async def _create_opening(job_service: JobOpeningService, *, role_title: str):
     return await job_service.create(
         JobOpeningCreatePayload(
             role_title=role_title,
+            manager_email="manager@example.com",
             team="Platform",
             location="remote",
             experience_level="mid",
@@ -264,6 +265,7 @@ def test_application_rejected_after_close_time(tmp_path: Path) -> None:
         opening = await job_service.create(
             JobOpeningCreatePayload(
                 role_title=f"Expired Engineer {uuid4().hex[:6]}",
+                manager_email="manager@example.com",
                 team="Platform",
                 location="remote",
                 experience_level="mid",
@@ -536,6 +538,43 @@ def test_admin_review_update_persists_ai_fields_and_history(tmp_path: Path) -> N
         assert updated.online_research_summary == "Open-source activity looks relevant."
         assert updated.status_history
         assert "Manual override" in (updated.status_history[-1].note or "")
+
+    asyncio.run(run())
+
+
+def test_admin_review_auto_shortlists_when_ai_score_passes_threshold(tmp_path: Path) -> None:
+    """AI score >= threshold should automatically set applicant_status to shortlisted."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Threshold Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Threshold User",
+                email="threshold@example.com",
+                linkedin_url="https://www.linkedin.com/in/threshold-user",
+                portfolio_url="https://threshold.dev",
+                github_url="https://github.com/threshold-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        updated = await app_service.update_admin_review(
+            application_id=created.id,
+            updates={
+                "ai_score": 80.0,
+                "ai_screening_summary": "Passed threshold.",
+            },
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "shortlisted"
+        assert updated.rejection_reason is None
+        assert updated.ai_score == 80.0
 
     asyncio.run(run())
 

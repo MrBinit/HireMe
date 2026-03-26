@@ -11,6 +11,7 @@ from app.api.deps import (
     get_admin_auth_service_dep,
     get_candidate_evaluation_service_dep,
     get_evaluation_queue_publisher_dep,
+    get_research_queue_publisher_dep,
     get_admin_principal,
     get_application_service_dep,
     get_s3_store,
@@ -27,7 +28,7 @@ from app.schemas.application import (
 )
 from app.schemas.auth import AdminAccessTokenResponse, AdminLoginPayload
 from app.infra.s3_store import S3ObjectStore
-from app.schemas.evaluation import CandidateEvaluationQueueResponse
+from app.schemas.evaluation import CandidateEvaluationQueueResponse, CandidateResearchQueueResponse
 from app.services.admin_auth_service import (
     AdminAuthConfigurationError,
     AdminAuthError,
@@ -39,6 +40,11 @@ from app.services.evaluation_queue import (
     CandidateEvaluationJob,
     EvaluationQueuePublishError,
     EvaluationQueuePublisher,
+)
+from app.services.research_queue import (
+    CandidateResearchEnrichmentJob,
+    ResearchQueuePublishError,
+    ResearchQueuePublisher,
 )
 
 router = APIRouter(tags=["admin"])
@@ -315,4 +321,97 @@ async def _enqueue_candidate_evaluation(
         queued=True,
         queued_at=queued_at,
         queue_name=runtime_config.evaluation.queue_name,
+    )
+
+
+@router.post(
+    "/admin/candidates/{application_id}/research",
+    response_model=CandidateResearchQueueResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_candidate_research_enrichment(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+    queue: ResearchQueuePublisher = Depends(get_research_queue_publisher_dep),
+) -> CandidateResearchQueueResponse:
+    """Queue research enrichment for one candidate (async only)."""
+
+    return await _enqueue_candidate_research(
+        application_id=application_id,
+        service=service,
+        queue=queue,
+    )
+
+
+@router.post(
+    "/admin/candidates/{application_id}/research/queue",
+    response_model=CandidateResearchQueueResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def queue_candidate_research_enrichment(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+    queue: ResearchQueuePublisher = Depends(get_research_queue_publisher_dep),
+) -> CandidateResearchQueueResponse:
+    """Enqueue candidate research enrichment to be processed asynchronously."""
+
+    return await _enqueue_candidate_research(
+        application_id=application_id,
+        service=service,
+        queue=queue,
+    )
+
+
+async def _enqueue_candidate_research(
+    *,
+    application_id: UUID,
+    service: ApplicationService,
+    queue: ResearchQueuePublisher,
+) -> CandidateResearchQueueResponse:
+    """Shared queue-enqueue implementation for async research routes."""
+
+    runtime_config = get_runtime_config()
+    enrichment_config = runtime_config.research.enrichment
+    if not enrichment_config.use_queue:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="research enrichment queue is disabled",
+        )
+
+    candidate = await service.get_by_id(application_id)
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    if candidate.applicant_status not in enrichment_config.target_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "candidate status not eligible for research enrichment queue; "
+                f"allowed={enrichment_config.target_statuses}"
+            ),
+        )
+
+    queued_at = datetime.now(tz=timezone.utc)
+    job = CandidateResearchEnrichmentJob(
+        application_id=application_id,
+        queued_at=queued_at,
+    )
+    try:
+        with anyio.fail_after(enrichment_config.enqueue_timeout_seconds):
+            await queue.publish(job)
+    except (ResearchQueuePublishError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="failed to queue research enrichment job",
+        ) from exc
+
+    return CandidateResearchQueueResponse(
+        application_id=application_id,
+        queued=True,
+        queued_at=queued_at,
+        queue_name=enrichment_config.queue_name,
     )

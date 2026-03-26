@@ -11,6 +11,12 @@ evaluation:
   receive_wait_seconds: 20
   visibility_timeout_seconds: 300
   max_receive_count: 5
+  target_statuses:
+    - screened
+    - shortlisted
+    - in_interview
+    - offer
+    - sent_to_manager
   max_reason_chars: 500
   max_work_summary_chars: 1500
   summary_prompt_template: |

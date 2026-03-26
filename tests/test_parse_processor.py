@@ -102,6 +102,7 @@ async def _create_opening(
     await job_service.create(
         JobOpeningCreatePayload(
             role_title=role_title,
+            manager_email="manager@example.com",
             team="Platform",
             location="remote",
             experience_level="mid",
