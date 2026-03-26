@@ -276,6 +276,30 @@ class LocalApplicationRepository(ApplicationRepository):
 
             return False
 
+    async def transition_interview_schedule_status(
+        self,
+        *,
+        application_id: UUID,
+        from_statuses: set[str],
+        to_status: str,
+    ) -> bool:
+        """Atomically transition interview status for local JSON storage."""
+
+        async with self._lock:
+            raw_records = await asyncio.to_thread(self._read_records_sync)
+            target_id = str(application_id)
+            for item in raw_records:
+                if str(item.get("id", "")) != target_id:
+                    continue
+                current = item.get("interview_schedule_status")
+                if current not in set(from_statuses):
+                    return False
+                item["interview_schedule_status"] = to_status
+                item["interview_schedule_error"] = None
+                await asyncio.to_thread(self._write_records_sync, raw_records)
+                return True
+            return False
+
     def _read_records_sync(self) -> list[dict]:
         """Read raw JSON records from disk."""
 

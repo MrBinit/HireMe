@@ -59,7 +59,7 @@ class ApplicantApplication(Base):
     candidate_brief: Mapped[str | None] = mapped_column(String(1500), nullable=True)
     online_research_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     interview_schedule_status: Mapped[str | None] = mapped_column(
-        String(30), nullable=True, index=True
+        String(64), nullable=True, index=True
     )
     interview_schedule_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     interview_schedule_sent_at: Mapped[datetime | None] = mapped_column(

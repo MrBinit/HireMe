@@ -295,9 +295,11 @@ class SqsEvaluationWorker:
         if candidate.interview_schedule_status in {
             "queued",
             "in_progress",
+            "interview_confirming",
             "interview_options_sent",
             "interview_email_sent",
             "options_sent",
+            "interview_booked",
         }:
             logger.info(
                 "evaluation worker application_id=%s "

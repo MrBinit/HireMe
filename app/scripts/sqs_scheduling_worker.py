@@ -187,6 +187,10 @@ async def _run_worker() -> None:
         calendar_client=calendar_client,
         email_sender=get_email_sender(),
         config=runtime_config.scheduling,
+        security_config=runtime_config.security,
+        confirmation_token_secret=(
+            settings.interview_confirmation_token_secret or settings.admin_jwt_secret
+        ),
     )
 
     queue_client = SqsQueueClient(

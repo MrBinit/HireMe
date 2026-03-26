@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -270,6 +270,35 @@ class PostgresApplicationRepository(ApplicationRepository):
 
             await session.commit()
             return True
+
+    async def transition_interview_schedule_status(
+        self,
+        *,
+        application_id: UUID,
+        from_statuses: set[str],
+        to_status: str,
+    ) -> bool:
+        """Atomically transition interview schedule status when expected state matches."""
+
+        normalized_from = {value for value in from_statuses if isinstance(value, str) and value}
+        if not normalized_from:
+            return False
+
+        async with self._session_factory() as session:
+            stmt = (
+                update(ApplicantApplication)
+                .where(
+                    ApplicantApplication.id == application_id,
+                    ApplicantApplication.interview_schedule_status.in_(list(normalized_from)),
+                )
+                .values(
+                    interview_schedule_status=to_status,
+                    interview_schedule_error=None,
+                )
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return int(result.rowcount or 0) > 0
 
     @staticmethod
     def _to_record(entity: ApplicantApplication) -> ApplicationRecord:

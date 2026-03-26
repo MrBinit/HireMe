@@ -237,6 +237,9 @@
   ```bash
   venv/bin/python -m app.scripts.sqs_scheduling_worker
   ```
+  ```bash
+  venv/bin/python -m app.scripts.interview_hold_expiry_worker
+  ```
 - Submission path is fast and non-blocking for parsing:
   1) API stores applicant row in Postgres + resume in S3.
   2) API enqueues parse message to SQS.
@@ -253,6 +256,15 @@
   1) Candidate is auto-shortlisted after evaluation threshold pass.
   2) Evaluation worker enqueues scheduling message to SQS.
   3) Scheduling worker fetches manager free/busy, creates 3-5 held 45-minute slots, and emails options to candidate.
+- Interview confirmation + expiry path:
+  1) Candidate confirms one option via one-click token endpoint `POST /api/v1/applications/interview/confirm-token`.
+  2) Legacy/manual endpoint is also available: `POST /api/v1/applications/{application_id}/interview/confirm` (email + option number).
+  3) Selected hold is confirmed and candidate is added as attendee; Google Meet link is requested; other holds are released.
+  4) DB is updated on confirm (`interview_schedule_status=interview_booked` and `applicant_status=in_interview` by default).
+  5) System does not wait for email replies to finalize booking; booking finalization is API-driven.
+  6) Candidate may accept the invite directly in Google Calendar (`Yes`) after booking. Current implementation does not yet persist attendee `responseStatus` back into DB.
+  7) Recommended follow-up: add calendar attendee response sync (polling or Google push watch) to mirror accept/decline in DB.
+  8) Expiry worker releases unconfirmed holds once `interview_hold_expires_at` passes (default 24h from option send).
 - Parse-first strategy:
   - first stage extracts raw text from PDF/DOCX
   - parse result stores compact structured fields only:
@@ -295,6 +307,7 @@
      - `GOOGLE_REFRESH_TOKEN`
 12. Set JWT secret in `.env`:
    - `ADMIN_JWT_SECRET`
+   - optional: `INTERVIEW_CONFIRMATION_TOKEN_SECRET` (if omitted, `ADMIN_JWT_SECRET` is used for interview confirmation links)
 13. Set admin login credentials in `.env`:
    - `ADMIN_USERNAME`
    - `ADMIN_PASSWORD_HASH` (recommended) or `ADMIN_PASSWORD` (fallback)
@@ -318,7 +331,11 @@
    ```bash
    venv/bin/python -m app.scripts.sqs_scheduling_worker
    ```
-19. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
+19. Start hold-expiry worker:
+   ```bash
+   venv/bin/python -m app.scripts.interview_hold_expiry_worker
+   ```
+20. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
 
 ## Tests
 Run the test suite:

@@ -258,6 +258,32 @@ class S3ApplicationRepository(ApplicationRepository):
         )
         return True
 
+    async def transition_interview_schedule_status(
+        self,
+        *,
+        application_id: UUID,
+        from_statuses: set[str],
+        to_status: str,
+    ) -> bool:
+        """Best-effort status transition for S3-backed storage."""
+
+        record = await self.get_by_id(application_id)
+        if record is None:
+            return False
+        if record.interview_schedule_status not in set(from_statuses):
+            return False
+        updated = record.model_copy(
+            update={
+                "interview_schedule_status": to_status,
+                "interview_schedule_error": None,
+            }
+        )
+        await self._store.put_json(
+            self._application_key(application_id),
+            updated.model_dump(mode="json"),
+        )
+        return True
+
     def _application_key(self, application_id: UUID) -> str:
         """Return S3 key for application record object."""
 

@@ -2,8 +2,9 @@
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from app.api.router import api_router
 from app.core.error import register_exception_handlers
@@ -86,6 +87,24 @@ def create_app() -> FastAPI:
         """Health probe endpoint."""
 
         return {"status": "ok"}
+
+    @app.get("/auth/google/login", include_in_schema=False)
+    async def legacy_google_oauth_login(request: Request) -> RedirectResponse:
+        """Compatibility alias for non-versioned Google OAuth login route."""
+
+        target = "/api/v1/auth/google/login"
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(url=target, status_code=307)
+
+    @app.get("/auth/google/callback", include_in_schema=False)
+    async def legacy_google_oauth_callback(request: Request) -> RedirectResponse:
+        """Compatibility alias for non-versioned Google OAuth callback route."""
+
+        target = "/api/v1/auth/google/callback"
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(url=target, status_code=307)
 
     return app
 

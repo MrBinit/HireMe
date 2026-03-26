@@ -22,9 +22,53 @@ scheduling:
   business_hours_start_hour: 10
   business_hours_end_hour: 17
   min_notice_hours: 4
-  hold_expiry_hours: 24
+  hold_expiry_hours: 48
+  reminder_enabled: true
+  reminder_after_hours: 24
+  reminder_target_statuses:
+    - interview_options_sent
+    - interview_email_sent
+    - options_sent
+  reminder_batch_size: 100
   timezone: Asia/Kathmandu
   use_domain_wide_delegation: false
+  candidate_confirmation_page_url: "http://localhost:3000/interview/confirm"
+  interview_action_page_url: "http://localhost:3000/interview/action"
+  manager_reschedule_action_page_url: "http://localhost:3000/interview/action"
+  confirmable_statuses:
+    - interview_options_sent
+    - interview_email_sent
+    - options_sent
+  manager_reschedule_confirmable_statuses:
+    - interview_reschedule_options_sent
+  booked_status: interview_booked
+  reschedule_requested_status: interview_reschedule_requested
+  reschedule_options_sent_status: interview_reschedule_options_sent
+  reschedule_confirming_status: interview_reschedule_confirming
+  max_reschedule_rounds: 6
+  action_link_expiry_hours: 72
+  expired_status: interview_expired
+  release_other_holds_on_confirm: true
+  require_confirmation_before_expiry: true
+  move_candidate_to_in_interview_on_booking: true
+  candidate_status_on_booking: in_interview
+  calendar_send_updates_mode: all
+  confirmed_event_title_template: "HireMe Technical Interview - {candidate_name} ({role_title})"
+  confirmed_event_description_template: |
+    Confirmed interview scheduled by HireMe.
+    Application ID: {application_id}
+    Candidate: {candidate_name}
+    Role: {role_title}
+    Candidate email: {candidate_email}
+    Selected option: {selected_option_number}
+  auto_release_expired_holds: true
+  expiry_poll_interval_seconds: 60
+  expiry_batch_size: 100
+  expiry_target_statuses:
+    - interview_options_sent
+    - interview_email_sent
+    - options_sent
+    - interview_reschedule_options_sent
   hold_event_title_template: "HireMe Interview Hold - {candidate_name} ({role_title})"
   hold_event_description_template: |
     Tentative interview hold created by HireMe.

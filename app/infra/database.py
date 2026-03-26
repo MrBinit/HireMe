@@ -137,6 +137,12 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             await connection.execute(
                 text(
                     "ALTER TABLE applicant_applications "
+                    "ALTER COLUMN interview_schedule_status TYPE VARCHAR(64)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
                     "ADD COLUMN IF NOT EXISTS interview_schedule_options JSONB"
                 )
             )

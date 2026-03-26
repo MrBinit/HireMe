@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     google_refresh_token: str | None = None
     google_service_account_json: str | None = None
     google_service_account_file: str | None = None
+    interview_confirmation_token_secret: str | None = None
     serpapi_api_key: str | None = None
     github_api_token: str | None = None
     twitter_consumer_key: str | None = None

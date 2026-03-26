@@ -122,6 +122,49 @@ class PublicApplicationStatusResponse(BaseModel):
     research_ready: bool = False
 
 
+class InterviewSlotConfirmPayload(BaseModel):
+    """Candidate payload to confirm one interview slot option."""
+
+    email: EmailStr
+    option_number: int = Field(ge=1, le=20)
+
+
+class InterviewSlotConfirmResponse(BaseModel):
+    """Response payload after candidate confirms interview slot."""
+
+    application_id: UUID
+    interview_schedule_status: str
+    applicant_status: ApplicantStatus
+    selected_option_number: int
+    confirmed_event_id: str
+    confirmed_event_link: str | None = None
+    confirmed_meeting_link: str | None = None
+    confirmed_at: datetime
+
+
+class InterviewTokenConfirmPayload(BaseModel):
+    """Payload for one-click interview confirmation via signed token."""
+
+    token: str = Field(min_length=16, max_length=5000)
+
+
+class InterviewActionTokenPayload(BaseModel):
+    """Payload for signed interview action token (reschedule/approve/reject)."""
+
+    token: str = Field(min_length=16, max_length=5000)
+
+
+class InterviewActionResponse(BaseModel):
+    """Response payload after one interview action token is processed."""
+
+    application_id: UUID
+    interview_schedule_status: str
+    applicant_status: ApplicantStatus
+    message: str
+    confirmed_event_link: str | None = None
+    confirmed_meeting_link: str | None = None
+
+
 class ApplicantStatusUpdatePayload(BaseModel):
     """Request payload for updating an applicant lifecycle status."""
 

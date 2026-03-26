@@ -102,3 +102,15 @@ class ApplicationRepository(ABC):
         """Update admin-review fields and return True when record exists."""
 
         raise NotImplementedError
+
+    @abstractmethod
+    async def transition_interview_schedule_status(
+        self,
+        *,
+        application_id: UUID,
+        from_statuses: set[str],
+        to_status: str,
+    ) -> bool:
+        """Atomically transition interview_schedule_status when current value matches."""
+
+        raise NotImplementedError

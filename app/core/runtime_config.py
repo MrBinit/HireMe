@@ -494,8 +494,57 @@ class SchedulingRuntimeConfig(BaseModel):
     business_hours_end_hour: int = 17
     min_notice_hours: int = 4
     hold_expiry_hours: int = 24
+    reminder_enabled: bool = True
+    reminder_after_hours: int = 24
+    reminder_target_statuses: list[str] = Field(
+        default_factory=lambda: ["interview_options_sent", "interview_email_sent", "options_sent"]
+    )
+    reminder_batch_size: int = 100
     timezone: str = "UTC"
     use_domain_wide_delegation: bool = True
+    candidate_confirmation_page_url: str = "http://localhost:3000/interview/confirm"
+    interview_action_page_url: str = "http://localhost:3000/interview/action"
+    manager_reschedule_action_page_url: str = "http://localhost:3000/interview/action"
+    confirmable_statuses: list[str] = Field(
+        default_factory=lambda: ["interview_options_sent", "interview_email_sent", "options_sent"]
+    )
+    manager_reschedule_confirmable_statuses: list[str] = Field(
+        default_factory=lambda: ["interview_reschedule_options_sent"]
+    )
+    booked_status: str = "interview_booked"
+    reschedule_requested_status: str = "interview_reschedule_requested"
+    reschedule_options_sent_status: str = "interview_reschedule_options_sent"
+    reschedule_confirming_status: str = "interview_reschedule_confirming"
+    max_reschedule_rounds: int = 6
+    action_link_expiry_hours: int = 72
+    expired_status: str = "interview_expired"
+    release_other_holds_on_confirm: bool = True
+    require_confirmation_before_expiry: bool = True
+    move_candidate_to_in_interview_on_booking: bool = True
+    candidate_status_on_booking: str = "in_interview"
+    calendar_send_updates_mode: Literal["all", "none", "externalOnly"] = "all"
+    confirmed_event_title_template: str = (
+        "HireMe Technical Interview - {candidate_name} ({role_title})"
+    )
+    confirmed_event_description_template: str = (
+        "Confirmed interview scheduled by HireMe.\n"
+        "Application ID: {application_id}\n"
+        "Candidate: {candidate_name}\n"
+        "Role: {role_title}\n"
+        "Candidate email: {candidate_email}\n"
+        "Selected option: {selected_option_number}\n"
+    )
+    auto_release_expired_holds: bool = True
+    expiry_poll_interval_seconds: int = 60
+    expiry_batch_size: int = 100
+    expiry_target_statuses: list[str] = Field(
+        default_factory=lambda: [
+            "interview_options_sent",
+            "interview_email_sent",
+            "options_sent",
+            "interview_reschedule_options_sent",
+        ]
+    )
     hold_event_title_template: str = "HireMe Interview Hold - {candidate_name} ({role_title})"
     hold_event_description_template: str = (
         "Tentative interview hold created by HireMe.\n"
@@ -540,10 +589,43 @@ class NotificationRuntimeConfig(BaseModel):
     interview_options_body_template: str = (
         "Hi {candidate_name},\n\n"
         "You have been shortlisted for the {role_title} role.\n"
-        "Please reply with one preferred option from the list below:\n\n"
+        "Please click one preferred option from the list below:\n\n"
         "{slot_options}\n\n"
         "These slots are held temporarily on the interviewer's calendar and will expire at "
         "{hold_expires_at}.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    interview_reminder_subject_template: str = (
+        "Reminder: confirm interview slot in 24 hours - HireMe ({role_title})"
+    )
+    interview_reminder_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "This is a reminder to confirm your technical interview slot for the {role_title} role.\n"
+        "Please click one preferred option below:\n\n"
+        "{slot_options}\n\n"
+        "If you are interested, please confirm within the next 24 hours. "
+        "Unconfirmed slots will expire at {hold_expires_at}.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    interview_confirmed_subject_template: str = "Interview confirmed - HireMe ({role_title})"
+    interview_confirmed_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "Your technical interview has been confirmed for:\n"
+        "{confirmed_slot}\n\n"
+        "{action_links}\n\n"
+        "A calendar invitation has been sent.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    interview_reschedule_options_subject_template: str = (
+        "Action required: approve alternative interview slots - HireMe ({role_title})"
+    )
+    interview_reschedule_options_body_template: str = (
+        "Hi Hiring Manager,\n\n"
+        "{candidate_name} requested to reschedule the technical interview for {role_title}.\n"
+        "Please review the proposed options below and click one ACCEPT link.\n\n"
+        "{slot_options}\n\n"
+        "If none work, click REJECT to request the next set of options:\n"
+        "{reject_link}\n\n"
         "Regards,\nHireMe Team"
     )
     send_timeout_seconds: float = 5.0

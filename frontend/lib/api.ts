@@ -90,10 +90,31 @@ export interface PublicApplicationStatus {
   applicant_status: ApplicantStatus;
   parse_status: "pending" | "in_progress" | "completed" | "failed";
   evaluation_status?: EvaluationStatus | null;
+  interview_schedule_status?: string | null;
   ai_score?: number | null;
   role_selection: string;
   submitted_at: string;
   research_ready: boolean;
+}
+
+export interface InterviewSlotConfirmResponse {
+  application_id: string;
+  interview_schedule_status: string;
+  applicant_status: ApplicantStatus;
+  selected_option_number: number;
+  confirmed_event_id: string;
+  confirmed_event_link?: string | null;
+  confirmed_meeting_link?: string | null;
+  confirmed_at: string;
+}
+
+export interface InterviewActionResponse {
+  application_id: string;
+  interview_schedule_status: string;
+  applicant_status: ApplicantStatus;
+  message: string;
+  confirmed_event_link?: string | null;
+  confirmed_meeting_link?: string | null;
 }
 
 export interface ReferenceRecord {
@@ -172,6 +193,52 @@ export async function getAdminResumeDownloadUrl(
       headers: {
         Authorization: `Bearer ${token}`,
       },
+    },
+  );
+}
+
+export async function confirmInterviewSlot(
+  applicationId: string,
+  payload: { email: string; option_number: number },
+): Promise<InterviewSlotConfirmResponse> {
+  return requestJson<InterviewSlotConfirmResponse>(
+    `/api/v1/applications/${applicationId}/interview/confirm`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function confirmInterviewSlotByToken(
+  token: string,
+): Promise<InterviewSlotConfirmResponse> {
+  return requestJson<InterviewSlotConfirmResponse>(
+    `/api/v1/applications/interview/confirm-token`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token }),
+    },
+  );
+}
+
+export async function processInterviewActionByToken(
+  token: string,
+): Promise<InterviewActionResponse> {
+  return requestJson<InterviewActionResponse>(
+    `/api/v1/applications/interview/action-token`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ token }),
     },
   );
 }

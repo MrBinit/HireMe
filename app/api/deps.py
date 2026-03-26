@@ -17,6 +17,7 @@ from app.core.security import (
 from app.core.settings import get_settings
 from app.infra.database import get_async_session_factory
 from app.infra.bedrock_runtime import BedrockRuntimeClient
+from app.infra.google_calendar_client import GoogleCalendarClient
 from app.infra.s3_store import S3ObjectStore
 from app.infra.smtp_email_sender import SmtpEmailSender
 from app.infra.sqs_queue import SqsParseQueuePublisher
@@ -49,6 +50,7 @@ from app.services.scheduling_queue import (
 from app.services.reference_service import ReferenceService
 from app.services.resume_storage import ResumeStorage, S3ResumeStorage
 from app.services.candidate_evaluation_service import CandidateEvaluationService
+from app.services.interview_scheduling_service import InterviewSchedulingService
 
 _admin_bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -231,6 +233,14 @@ def _build_smtp_sender(
         rejection_body_template=config.rejection_body_template,
         interview_options_subject_template=config.interview_options_subject_template,
         interview_options_body_template=config.interview_options_body_template,
+        interview_reminder_subject_template=config.interview_reminder_subject_template,
+        interview_reminder_body_template=config.interview_reminder_body_template,
+        interview_confirmed_subject_template=config.interview_confirmed_subject_template,
+        interview_confirmed_body_template=config.interview_confirmed_body_template,
+        interview_reschedule_options_subject_template=(
+            config.interview_reschedule_options_subject_template
+        ),
+        interview_reschedule_options_body_template=config.interview_reschedule_options_body_template,
     )
 
 
@@ -305,6 +315,32 @@ def get_candidate_evaluation_service() -> CandidateEvaluationService:
 
 
 @lru_cache(maxsize=1)
+def get_interview_scheduling_service() -> InterviewSchedulingService:
+    """Return cached interview scheduling service."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    return InterviewSchedulingService(
+        application_repository=get_application_repository(),
+        job_opening_repository=get_job_opening_repository(),
+        calendar_client=GoogleCalendarClient(
+            service_account_json=settings.google_service_account_json,
+            service_account_file=settings.google_service_account_file,
+            oauth_client_id=settings.google_client_id,
+            oauth_client_secret=settings.google_client_secret,
+            oauth_refresh_token=settings.google_refresh_token,
+            oauth_token_uri=runtime_config.google_api.token_uri,
+        ),
+        email_sender=get_email_sender(),
+        config=runtime_config.scheduling,
+        security_config=runtime_config.security,
+        confirmation_token_secret=(
+            settings.interview_confirmation_token_secret or settings.admin_jwt_secret
+        ),
+    )
+
+
+@lru_cache(maxsize=1)
 def get_reference_service() -> ReferenceService:
     """Return cached reference service instance."""
 
@@ -336,6 +372,12 @@ def get_candidate_evaluation_service_dep() -> CandidateEvaluationService:
     """FastAPI dependency wrapper for candidate evaluation service."""
 
     return get_candidate_evaluation_service()
+
+
+def get_interview_scheduling_service_dep() -> InterviewSchedulingService:
+    """FastAPI dependency wrapper for interview scheduling service."""
+
+    return get_interview_scheduling_service()
 
 
 def get_evaluation_queue_publisher_dep() -> EvaluationQueuePublisher:

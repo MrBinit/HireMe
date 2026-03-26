@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 class EmailSendError(RuntimeError):
@@ -38,6 +38,31 @@ class InterviewSlotOptionsEmail:
     role_title: str
     hold_expires_at: str
     slot_options: list[str]
+    slot_option_links: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class InterviewBookingConfirmedEmail:
+    """Payload for confirmed interview booking notification."""
+
+    recipient_name: str
+    recipient_email: str
+    role_title: str
+    confirmed_slot: str
+    action_links: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class InterviewRescheduleOptionsEmail:
+    """Payload for manager approval on alternative interview slots."""
+
+    candidate_name: str
+    manager_email: str
+    role_title: str
+    hold_expires_at: str
+    slot_options: list[str]
+    slot_option_links: list[tuple[str, str]] = field(default_factory=list)
+    reject_link: str | None = None
 
 
 class EmailSender(ABC):
@@ -69,6 +94,30 @@ class EmailSender(ABC):
 
         _ = payload
 
+    async def send_interview_slot_reminder(
+        self,
+        payload: InterviewSlotOptionsEmail,
+    ) -> None:
+        """Send follow-up reminder for still-open interview slot options."""
+
+        _ = payload
+
+    async def send_interview_booking_confirmed(
+        self,
+        payload: InterviewBookingConfirmedEmail,
+    ) -> None:
+        """Send interview booking confirmation email."""
+
+        _ = payload
+
+    async def send_interview_reschedule_options_to_manager(
+        self,
+        payload: InterviewRescheduleOptionsEmail,
+    ) -> None:
+        """Send alternative interview options to manager for approve/reject decision."""
+
+        _ = payload
+
 
 class NoopEmailSender(EmailSender):
     """No-op sender used when email is disabled or not configured."""
@@ -92,6 +141,30 @@ class NoopEmailSender(EmailSender):
     async def send_interview_slot_options(
         self,
         payload: InterviewSlotOptionsEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_interview_slot_reminder(
+        self,
+        payload: InterviewSlotOptionsEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_interview_booking_confirmed(
+        self,
+        payload: InterviewBookingConfirmedEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_interview_reschedule_options_to_manager(
+        self,
+        payload: InterviewRescheduleOptionsEmail,
     ) -> None:
         """Accept payload without sending."""
 
