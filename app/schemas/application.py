@@ -1,13 +1,13 @@
 """Schema models for candidate application payloads and responses."""
 
 from datetime import datetime
-from typing import Any
 from typing import Literal
 from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
 
 ParseStatus = Literal["pending", "in_progress", "completed", "failed"]
+EvaluationStatus = Literal["queued", "in_progress", "completed", "failed"]
 ApplicantStatus = Literal[
     "applied",
     "screened",
@@ -67,17 +67,17 @@ class ApplicationRecord(BaseModel):
     twitter_url: AnyHttpUrl | None = None
     role_selection: str
     parse_result: dict | None = None
+    parsed_total_years_experience: float | None = None
+    parsed_search_text: str | None = None
     parse_status: ParseStatus = "pending"
+    evaluation_status: EvaluationStatus | None = None
     applicant_status: ApplicantStatus = "applied"
+    rejection_reason: str | None = None
     ai_score: float | None = None
     ai_screening_summary: str | None = None
     online_research_summary: str | None = None
     status_history: list[StatusHistoryEntry] = Field(default_factory=list)
     reference_status: bool = False
-    latest_position: str | None = None
-    total_years_experience: float | None = None
-    parsed_skills: list[str] | None = None
-    parsed_education: list[dict[str, Any]] | None = None
     resume: ResumeFileMeta
     created_at: datetime
 
@@ -91,6 +91,14 @@ class ApplicationListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class ResumeDownloadResponse(BaseModel):
+    """Response payload containing temporary resume download URL."""
+
+    download_url: str
+    expires_in_seconds: int
+    filename: str
 
 
 class ApplicantStatusUpdatePayload(BaseModel):
@@ -108,3 +116,4 @@ class AdminCandidateReviewPayload(BaseModel):
     ai_score: float | None = Field(default=None, ge=0.0, le=100.0)
     ai_screening_summary: str | None = Field(default=None, max_length=4000)
     online_research_summary: str | None = Field(default=None, max_length=4000)
+    rejection_reason: str | None = Field(default=None, max_length=1000)

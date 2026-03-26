@@ -16,5 +16,14 @@ notification:
 
     Regards,
     HireMe Team
+  rejection_subject_template: "Application update - HireMe"
+  rejection_body_template: |
+    Hi {candidate_name},
+
+    Thank you for applying to HireMe for the {role_title} role.
+    After review, we will not be moving ahead with your resume this time.
+
+    Regards,
+    HireMe Team
   send_timeout_seconds: 5
   fail_submission_on_send_error: false

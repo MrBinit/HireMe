@@ -6,10 +6,13 @@
 ## Features implemented
 - Async FastAPI REST API for job openings and candidate applications.
 - Config split:
-  - Runtime secrets/endpoints in `.env` (`DATABASE_URL`, `SQS_PARSE_QUEUE_URL`).
+  - Runtime secrets/endpoints in `.env` (`DATABASE_URL`, `SQS_PARSE_QUEUE_URL`, `SQS_EVALUATION_QUEUE_URL`).
+  - API/middleware/security behavior in `app/config/api_platform_config.yaml`.
   - Application/runtime behavior in `app/config/application_config.yaml`.
   - Database/storage behavior in `app/config/database_config.yaml`.
   - Parse runtime/heading mapping in `app/config/parse_config.yaml`.
+  - Bedrock runtime in `app/config/bedrock_config.yaml`.
+  - LLM evaluation prompt in `app/config/evaluation_config.yaml`.
   - Email notification runtime in `app/config/notification_config.yaml`.
   - Google API non-secret metadata in `app/config/google_api.yaml`.
   - S3 settings in `app/config/s3_config.yaml`.
@@ -36,17 +39,20 @@
   - submitted fields (`full_name`, `email`, optional `linkedin_url`, required `portfolio_url`, required `github_url`, optional `twitter_url`)
   - `role_selection`
   - `resume.storage_path` (S3 URI such as `s3://hireme-cv-bucket/hireme/resumes/<file>.pdf` when using S3 backend)
-  - `parse_result` (JSON, default `null`)
+  - `parse_result` (single JSON column, default `null`) with:
+    - `skills`
+    - `total_years_experience`
+    - `education`
+    - `work_experience` (position, company/old office, duration, job_description)
+    - `old_offices`
+    - `key_achievements`
   - `parse_status` (default `pending`)
   - `applicant_status` (default `applied`)
   - `ai_score`, `ai_screening_summary`, `online_research_summary`
+  - `rejection_reason` (`Candidate failed in initial screening.` or `Candidate did not meet the AI score threshold.`)
+  - `parsed_total_years_experience`, `parsed_search_text` (fast prefilter columns)
   - `status_history` (for status timeline and admin override notes)
   - `reference_status` (default `false`, turns `true` when references are created via endpoint)
-  - denormalized parse summary columns:
-    - `latest_position`
-    - `total_years_experience`
-    - `parsed_skills`
-    - `parsed_education`
 - PostgreSQL persistence for:
   - `job_openings` table
   - `applicant_applications` table (includes `job_opening_id` UUID foreign key)
@@ -77,6 +83,8 @@
 - `GET /api/v1/admin/candidates/{application_id}` (admin candidate details)
 - `PATCH /api/v1/admin/candidates/{application_id}/status` (admin updates applicant status)
 - `PATCH /api/v1/admin/candidates/{application_id}/review` (admin AI fields + override note)
+- `POST /api/v1/admin/candidates/{application_id}/evaluate` (enqueue async LLM evaluation job, returns accepted response)
+- `POST /api/v1/admin/candidates/{application_id}/evaluate/queue` (alias for queue submit)
 - `POST /api/v1/job-openings`
 - `GET /api/v1/job-openings`
 - `DELETE /api/v1/job-openings/{job_opening_id}`
@@ -97,6 +105,8 @@
   - `GET /api/v1/admin/candidates/{application_id}`
   - `PATCH /api/v1/admin/candidates/{application_id}/status`
   - `PATCH /api/v1/admin/candidates/{application_id}/review`
+  - `POST /api/v1/admin/candidates/{application_id}/evaluate`
+  - `POST /api/v1/admin/candidates/{application_id}/evaluate/queue`
   - `POST /api/v1/job-openings`
   - `DELETE /api/v1/job-openings/{job_opening_id}`
   - `PATCH /api/v1/job-openings/{job_opening_id}/pause`
@@ -126,7 +136,7 @@
   - `error.code`
   - `error.message`
   - optional `error.details`
-  - Configurable under `error` in `app/config/application_config.yaml`.
+  - Configurable under `error` in `app/config/api_platform_config.yaml`.
 
 ## Pool Config
 - DB connection pool is configured under `postgres` in `app/config/database_config.yaml`:
@@ -138,32 +148,40 @@
   - `connect_timeout_seconds`
   - `command_timeout_seconds`
 
-## Parse Queue Config
+## Queue Config
 - Background parse queue/runtime knobs and section-heading aliases are under `parse` in `app/config/parse_config.yaml`.
-- These parameters are ready for queue worker integration (`sqs`/`redis`/`local` provider selection).
-- SQS queue endpoint is read from `.env` as `SQS_PARSE_QUEUE_URL`.
+- Parse queue endpoint is read from `.env` as `SQS_PARSE_QUEUE_URL`.
+- LLM evaluation queue runtime knobs are under `evaluation` in `app/config/evaluation_config.yaml`.
+- Evaluation queue endpoint is read from `.env` as `SQS_EVALUATION_QUEUE_URL`.
 
-## Parse Worker
-- Run API and worker as separate processes:
+## Workers
+- Run API and workers as separate processes:
   ```bash
   venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
   ```
   ```bash
   venv/bin/python -m app.scripts.sqs_worker
   ```
+  ```bash
+  venv/bin/python -m app.scripts.sqs_evaluation_worker
+  ```
 - Submission path is fast and non-blocking for parsing:
   1) API stores applicant row in Postgres + resume in S3.
   2) API enqueues parse message to SQS.
   3) Worker consumes message, extracts text with LangChain `UnstructuredFileLoader`, and updates `parse_status`/`parse_result` in Postgres.
+- Evaluation path is async and queue-backed:
+  1) Admin triggers evaluation endpoint.
+  2) API enqueues evaluation message to SQS and sets `evaluation_status=queued`.
+  3) Evaluation worker sets `evaluation_status` through `in_progress -> completed|failed` and persists AI fields.
 - Parse-first strategy:
   - first stage extracts raw text from PDF/DOCX
-  - parse result includes heading/section-based structured extraction:
+  - parse result stores compact structured fields only:
     - `skills`
-    - `projects`
-    - `position` (latest inferred role)
-    - `work_history` (position/company/date ranges)
-    - `total_years_experience` (calculated from merged experience date ranges)
-  - parse result includes `llm_input_hint` and `llm_fallback_recommended` for stage-2 LLM enrichment
+    - `total_years_experience`
+    - `education`
+    - `work_experience`
+    - `old_offices`
+    - `key_achievements`
 
 ## Run locally
 1. Create and activate virtualenv.
@@ -177,19 +195,33 @@
    ```
 4. Set `DATABASE_URL` in `.env` to your RDS PostgreSQL URL.
 5. Set `SQS_PARSE_QUEUE_URL` in `.env` to your parse queue URL.
-6. Set SMTP credential keys in `.env` for confirmation emails:
+6. Set `SQS_EVALUATION_QUEUE_URL` in `.env` to your LLM evaluation queue URL.
+7. Set AWS credentials in `.env` (for S3/SQS/Bedrock):
+   - `AWS_ACCESS_KEY_ID`
+   - `AWS_SECRET_ACCESS_KEY`
+   - optional: `AWS_SESSION_TOKEN`
+   - optional: `BEDROCK_ENDPOINT_URL` (local/test override)
+8. Set SMTP credential keys in `.env` for confirmation emails:
    - `SMTP_USERNAME`
    - `SMTP_PASSWORD`
-7. Set JWT secret in `.env`:
+9. Set JWT secret in `.env`:
    - `ADMIN_JWT_SECRET`
-8. Set admin login credentials in `.env`:
+10. Set admin login credentials in `.env`:
    - `ADMIN_USERNAME`
    - `ADMIN_PASSWORD_HASH` (recommended) or `ADMIN_PASSWORD` (fallback)
-9. Start API:
+11. Start API:
    ```bash
    venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-10. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
+12. Start parse worker:
+   ```bash
+   venv/bin/python -m app.scripts.sqs_worker
+   ```
+13. Start evaluation worker:
+   ```bash
+   venv/bin/python -m app.scripts.sqs_evaluation_worker
+   ```
+14. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
 
 ## Tests
 Run the test suite:

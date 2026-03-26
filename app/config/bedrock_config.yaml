@@ -1,0 +1,11 @@
+bedrock:
+  enabled: true
+  region: us-east-1
+  primary_model_id: "us.anthropic.claude-sonnet-4-20250514-v1:0"
+  fallback_model_id: "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+  max_tokens: 1200
+  temperature: 0.1
+  top_p: 0.9
+  request_timeout_seconds: 20
+  max_retries: 2
+  max_concurrency: 20

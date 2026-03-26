@@ -47,6 +47,7 @@ class ApplicationRuntimeConfig(BaseModel):
     max_doc_size_mb: int = 10
     max_docx_size_mb: int = 10
     resume_chunk_size_bytes: int = 1_048_576
+    resume_download_url_expire_seconds: int = 900
     default_list_limit: int = 20
     max_list_limit: int = 100
     applications_not_open_message: str = "applications have not opened yet"
@@ -57,6 +58,37 @@ class ApplicationRuntimeConfig(BaseModel):
     invalid_resume_format_message: str = "Invalid resume format. Please upload a PDF or DOCX file."
     duplicate_application_message: str = (
         "duplicate application: this email has already applied to this job opening"
+    )
+    initial_screening_fail_reason: str = "Candidate failed in initial screening."
+    ai_score_fail_reason: str = "Candidate did not meet the AI score threshold."
+    ai_score_threshold: float = 70.0
+    prefilter_min_keyword_length: int = 3
+    prefilter_max_keywords: int = 24
+    prefilter_min_keyword_matches: int = 5
+    prefilter_min_skill_matches: int = 5
+    prefilter_max_search_text_chars: int = 8000
+    prefilter_stop_words: list[str] = Field(
+        default_factory=lambda: [
+            "and",
+            "the",
+            "for",
+            "with",
+            "from",
+            "that",
+            "this",
+            "will",
+            "have",
+            "has",
+            "are",
+            "you",
+            "your",
+            "our",
+            "their",
+            "role",
+            "team",
+            "years",
+            "year",
+        ]
     )
 
 
@@ -200,6 +232,42 @@ class ParseRuntimeConfig(BaseModel):
     section_aliases: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class BedrockRuntimeConfig(BaseModel):
+    """Runtime config for AWS Bedrock model invocation."""
+
+    enabled: bool = True
+    region: str = "us-east-1"
+    primary_model_id: str = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    fallback_model_id: str = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+    max_tokens: int = 1200
+    temperature: float = 0.1
+    top_p: float = 0.9
+    request_timeout_seconds: float = 20.0
+    max_retries: int = 2
+    max_concurrency: int = 20
+
+
+class EvaluationRuntimeConfig(BaseModel):
+    """Prompt and output constraints for candidate LLM evaluation."""
+
+    enabled: bool = True
+    use_queue: bool = True
+    provider: Literal["sqs", "redis", "local"] = "sqs"
+    region: str = "us-east-1"
+    queue_name: str = "hireme-llm-evaluation"
+    enqueue_timeout_seconds: float = 2.0
+    worker_concurrency: int = 10
+    max_in_flight_per_worker: int = 10
+    receive_batch_size: int = 10
+    receive_wait_seconds: int = 20
+    visibility_timeout_seconds: int = 300
+    max_receive_count: int = 5
+    prompt_template: str = ""
+    summary_prompt_template: str = ""
+    max_reason_chars: int = 500
+    max_work_summary_chars: int = 1500
+
+
 class NotificationRuntimeConfig(BaseModel):
     """Runtime config for application confirmation emails."""
 
@@ -220,6 +288,13 @@ class NotificationRuntimeConfig(BaseModel):
     confirmation_body_template: str = (
         "Hi {candidate_name},\n\n"
         "Thank you for applying to HireMe. Your application has been submitted.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    rejection_subject_template: str = "Application update - HireMe"
+    rejection_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "Thank you for applying to HireMe for the {role_title} role. "
+        "After review, we will not be moving ahead with your resume this time.\n\n"
         "Regards,\nHireMe Team"
     )
     send_timeout_seconds: float = 5.0
@@ -314,6 +389,8 @@ class RuntimeConfig(BaseModel):
     error: ErrorRuntimeConfig = Field(default_factory=ErrorRuntimeConfig)
     security: SecurityRuntimeConfig = Field(default_factory=SecurityRuntimeConfig)
     parse: ParseRuntimeConfig = Field(default_factory=ParseRuntimeConfig)
+    bedrock: BedrockRuntimeConfig = Field(default_factory=BedrockRuntimeConfig)
+    evaluation: EvaluationRuntimeConfig = Field(default_factory=EvaluationRuntimeConfig)
     notification: NotificationRuntimeConfig = Field(default_factory=NotificationRuntimeConfig)
     google_api: GoogleApiRuntimeConfig = Field(default_factory=GoogleApiRuntimeConfig)
     cors: CorsRuntimeConfig = Field(default_factory=CorsRuntimeConfig)
@@ -329,12 +406,15 @@ def get_runtime_config() -> RuntimeConfig:
     """Load and cache runtime configuration from YAML."""
 
     settings = get_settings()
+    api_platform_config_path = settings.api_platform_config_path
     application_config_path = settings.application_config_path
     database_config_path = settings.database_config_path
     parse_config_path = settings.parse_config_path
     notification_config_path = settings.notification_config_path
     google_api_config_path = settings.google_api_config_path
     s3_config_path = settings.s3_config_path
+    bedrock_config_path = settings.bedrock_config_path
+    evaluation_config_path = settings.evaluation_config_path
 
     try:
         import yaml
@@ -352,12 +432,15 @@ def get_runtime_config() -> RuntimeConfig:
             raise RuntimeError(f"YAML config must be a mapping: {path}")
         return payload
 
+    raw_api_platform_config = _load_yaml(api_platform_config_path)
     raw_application_config = _load_yaml(application_config_path)
     raw_database_config = _load_yaml(database_config_path)
     raw_parse_config = _load_yaml(parse_config_path)
     raw_notification_config = _load_yaml(notification_config_path)
     raw_google_api_config = _load_yaml(google_api_config_path)
     raw_s3_config = _load_yaml(s3_config_path)
+    raw_bedrock_config = _load_yaml(bedrock_config_path)
+    raw_evaluation_config = _load_yaml(evaluation_config_path)
 
     def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = dict(base)
@@ -369,7 +452,8 @@ def get_runtime_config() -> RuntimeConfig:
                 merged[key] = value
         return merged
 
-    combined_config = _merge_dicts(raw_application_config, raw_database_config)
+    combined_config = _merge_dicts(raw_api_platform_config, raw_application_config)
+    combined_config = _merge_dicts(combined_config, raw_database_config)
     if "parse" in raw_parse_config and isinstance(raw_parse_config["parse"], dict):
         combined_config = _merge_dicts(combined_config, {"parse": raw_parse_config["parse"]})
     else:
@@ -396,5 +480,18 @@ def get_runtime_config() -> RuntimeConfig:
         )
     else:
         combined_config = _merge_dicts(combined_config, {"google_api": raw_google_api_config})
+    if "bedrock" in raw_bedrock_config and isinstance(raw_bedrock_config["bedrock"], dict):
+        combined_config = _merge_dicts(combined_config, {"bedrock": raw_bedrock_config["bedrock"]})
+    else:
+        combined_config = _merge_dicts(combined_config, {"bedrock": raw_bedrock_config})
+    if "evaluation" in raw_evaluation_config and isinstance(
+        raw_evaluation_config["evaluation"], dict
+    ):
+        combined_config = _merge_dicts(
+            combined_config,
+            {"evaluation": raw_evaluation_config["evaluation"]},
+        )
+    else:
+        combined_config = _merge_dicts(combined_config, {"evaluation": raw_evaluation_config})
 
     return RuntimeConfig.model_validate(combined_config)

@@ -12,7 +12,6 @@ from uuid import UUID
 from app.repositories.application_repository import (
     ApplicationRepository,
     DuplicateApplicationError,
-    extract_parse_projection,
 )
 from app.schemas.application import ApplicationRecord
 from app.schemas.application import ApplicantStatus
@@ -66,6 +65,10 @@ class LocalApplicationRepository(ApplicationRepository):
         applicant_status: ApplicantStatus | None = None,
         submitted_from: datetime | None = None,
         submitted_to: datetime | None = None,
+        keyword_search: str | None = None,
+        min_total_years_experience: float | None = None,
+        max_total_years_experience: float | None = None,
+        experience_within_range: bool | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """Return paginated local applications, optionally filtered by opening."""
 
@@ -98,6 +101,45 @@ class LocalApplicationRepository(ApplicationRepository):
                 continue
             if submitted_to is not None and created_at is not None and created_at > submitted_to:
                 continue
+
+            parsed_search_text = str(item.get("parsed_search_text") or "").casefold()
+            if keyword_search:
+                keyword_terms = [
+                    term.casefold()
+                    for term in keyword_search.split()
+                    if term and len(term.strip()) >= 2
+                ]
+                if keyword_terms and not any(term in parsed_search_text for term in keyword_terms):
+                    continue
+
+            years_value = item.get("parsed_total_years_experience")
+            years: float | None = None
+            if isinstance(years_value, (int, float)):
+                years = float(years_value)
+
+            if min_total_years_experience is not None or max_total_years_experience is not None:
+                is_within = True
+                if years is None:
+                    is_within = False
+                if (
+                    years is not None
+                    and min_total_years_experience is not None
+                    and years < min_total_years_experience
+                ):
+                    is_within = False
+                if (
+                    years is not None
+                    and max_total_years_experience is not None
+                    and years > max_total_years_experience
+                ):
+                    is_within = False
+                if experience_within_range is True and not is_within:
+                    continue
+                if experience_within_range is False and is_within:
+                    continue
+                if experience_within_range is None and not is_within:
+                    continue
+
             filtered.append(item)
         parsed = [ApplicationRecord.model_validate(item) for item in filtered]
         parsed.sort(key=lambda record: record.created_at, reverse=True)
@@ -120,6 +162,8 @@ class LocalApplicationRepository(ApplicationRepository):
         application_id: UUID,
         parse_status: ParseStatus,
         parse_result: dict | None,
+        parsed_total_years_experience: float | None = None,
+        parsed_search_text: str | None = None,
     ) -> bool:
         """Update parse fields for a local application."""
 
@@ -132,11 +176,8 @@ class LocalApplicationRepository(ApplicationRepository):
                     continue
                 item["parse_status"] = parse_status
                 item["parse_result"] = parse_result
-                projection = extract_parse_projection(parse_result)
-                item["latest_position"] = projection["latest_position"]
-                item["total_years_experience"] = projection["total_years_experience"]
-                item["parsed_skills"] = projection["parsed_skills"]
-                item["parsed_education"] = projection["parsed_education"]
+                item["parsed_total_years_experience"] = parsed_total_years_experience
+                item["parsed_search_text"] = parsed_search_text
                 await asyncio.to_thread(self._write_records_sync, raw_records)
                 return True
 
@@ -199,6 +240,10 @@ class LocalApplicationRepository(ApplicationRepository):
                 now_iso = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
                 if "applicant_status" in updates and updates["applicant_status"] is not None:
                     item["applicant_status"] = updates["applicant_status"]
+                if "rejection_reason" in updates:
+                    item["rejection_reason"] = updates["rejection_reason"]
+                if "evaluation_status" in updates:
+                    item["evaluation_status"] = updates["evaluation_status"]
 
                 if "ai_score" in updates:
                     item["ai_score"] = updates["ai_score"]

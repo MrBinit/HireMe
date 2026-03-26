@@ -48,20 +48,28 @@ class ApplicantApplication(Base):
     resume_content_type: Mapped[str] = mapped_column(String(120), nullable=False)
     resume_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     parse_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    parsed_total_years_experience: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        index=True,
+    )
+    parsed_search_text: Mapped[str | None] = mapped_column(String(8000), nullable=True)
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_screening_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     online_research_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     status_history: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
-    parsed_skills: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    parsed_education: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
-    latest_position: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    total_years_experience: Mapped[float | None] = mapped_column(Float, nullable=True)
     parse_status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="pending", server_default="pending"
+    )
+    evaluation_status: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+        index=True,
     )
     applicant_status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="applied", server_default="applied"
     )
+    rejection_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     reference_status: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

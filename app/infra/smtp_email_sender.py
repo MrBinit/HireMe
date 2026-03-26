@@ -11,6 +11,7 @@ from app.services.email_sender import (
     ApplicationConfirmationEmail,
     EmailSendError,
     EmailSender,
+    InitialScreeningRejectionEmail,
 )
 
 
@@ -28,8 +29,10 @@ class SmtpEmailSender(EmailSender):
         use_ssl: bool,
         sender_name: str,
         sender_email: str,
-        subject_template: str,
-        body_template: str,
+        confirmation_subject_template: str,
+        confirmation_body_template: str,
+        rejection_subject_template: str,
+        rejection_body_template: str,
     ):
         """Initialize SMTP sender with server and template settings."""
 
@@ -41,8 +44,10 @@ class SmtpEmailSender(EmailSender):
         self._use_ssl = use_ssl
         self._sender_name = sender_name
         self._sender_email = sender_email
-        self._subject_template = subject_template
-        self._body_template = body_template
+        self._confirmation_subject_template = confirmation_subject_template
+        self._confirmation_body_template = confirmation_body_template
+        self._rejection_subject_template = rejection_subject_template
+        self._rejection_body_template = rejection_body_template
 
     async def send_application_confirmation(
         self,
@@ -55,19 +60,57 @@ class SmtpEmailSender(EmailSender):
             "candidate_email": payload.candidate_email,
             "role_title": payload.role_title,
         }
-        subject = self._subject_template.format(**variables)
-        body = self._body_template.format(**variables)
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._confirmation_subject_template,
+            body_template=self._confirmation_body_template,
+            error_message="failed to send application confirmation email",
+        )
 
+    async def send_initial_screening_rejection(
+        self,
+        payload: InitialScreeningRejectionEmail,
+    ) -> None:
+        """Send one initial-screening rejection email message."""
+
+        variables = {
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+            "rejection_reason": payload.rejection_reason,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._rejection_subject_template,
+            body_template=self._rejection_body_template,
+            error_message="failed to send rejection email",
+        )
+
+    async def _send_templated_email(
+        self,
+        *,
+        recipient_email: str,
+        variables: dict[str, str],
+        subject_template: str,
+        body_template: str,
+        error_message: str,
+    ) -> None:
+        """Render one template email and send over SMTP."""
+
+        subject = subject_template.format(**variables)
+        body = body_template.format(**variables)
         message = EmailMessage()
         message["From"] = f"{self._sender_name} <{self._sender_email}>"
-        message["To"] = payload.candidate_email
+        message["To"] = recipient_email
         message["Subject"] = subject
         message.set_content(body)
 
         try:
             await anyio.to_thread.run_sync(self._send_sync, message)
         except Exception as exc:
-            raise EmailSendError("failed to send application confirmation email") from exc
+            raise EmailSendError(error_message) from exc
 
     def _send_sync(self, message: EmailMessage) -> None:
         """Perform blocking SMTP send."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -30,6 +31,7 @@ from app.schemas.application import (
     StatusHistoryEntry,
 )
 from app.schemas.application import ApplicationListResponse
+from app.schemas.job_opening import JobOpeningRecord
 from app.services.email_sender import ApplicationConfirmationEmail, EmailSendError, EmailSender
 from app.services.parse_queue import ParseQueuePublishError, ParseQueuePublisher, ResumeParseJob
 from app.services.resume_storage import ResumeStorage
@@ -134,8 +136,12 @@ class ApplicationService:
                 size_bytes=resume_upload.size_bytes,
             ),
             parse_result=None,
+            parsed_total_years_experience=None,
+            parsed_search_text=None,
             parse_status="pending",
+            evaluation_status=None,
             applicant_status="applied",
+            rejection_reason=None,
             ai_score=None,
             ai_screening_summary=None,
             online_research_summary=None,
@@ -148,10 +154,6 @@ class ApplicationService:
                 )
             ],
             reference_status=False,
-            latest_position=None,
-            total_years_experience=None,
-            parsed_skills=None,
-            parsed_education=None,
             created_at=created_at,
         )
 
@@ -225,6 +227,9 @@ class ApplicationService:
         applicant_status: ApplicantStatus | None = None,
         submitted_from: datetime | None = None,
         submitted_to: datetime | None = None,
+        keyword_search: str | None = None,
+        experience_within_range: bool | None = None,
+        prefilter_by_job_opening: bool = False,
     ) -> ApplicationListResponse:
         """Return paginated applications, optionally filtered by job opening."""
 
@@ -240,6 +245,28 @@ class ApplicationService:
         if submitted_from and submitted_to and submitted_to < submitted_from:
             raise ApplicationValidationError("submitted_to must be later than submitted_from")
 
+        min_total_years_experience: float | None = None
+        max_total_years_experience: float | None = None
+        effective_keyword_search = keyword_search
+
+        if prefilter_by_job_opening:
+            if job_opening_id is None:
+                raise ApplicationValidationError(
+                    "job_opening_id is required when prefilter_by_job_opening=true"
+                )
+            opening = await self._job_opening_repository.get(job_opening_id)
+            if opening is None:
+                raise ApplicationValidationError("job opening not found for prefilter")
+
+            if not effective_keyword_search:
+                effective_keyword_search = self._build_keyword_query_from_opening(opening)
+
+            min_total_years_experience, max_total_years_experience = self._parse_experience_range(
+                opening.experience_range
+            )
+            if experience_within_range is None:
+                experience_within_range = True
+
         items, total = await self._repository.list(
             offset=offset,
             limit=effective_limit,
@@ -248,6 +275,10 @@ class ApplicationService:
             applicant_status=applicant_status,
             submitted_from=submitted_from,
             submitted_to=submitted_to,
+            keyword_search=effective_keyword_search,
+            min_total_years_experience=min_total_years_experience,
+            max_total_years_experience=max_total_years_experience,
+            experience_within_range=experience_within_range,
         )
         return ApplicationListResponse(
             items=items,
@@ -286,6 +317,17 @@ class ApplicationService:
         updates: dict[str, object],
     ) -> ApplicationRecord | None:
         """Update admin review fields and return updated candidate record."""
+
+        ai_score = updates.get("ai_score")
+        if isinstance(ai_score, (int, float)):
+            if float(ai_score) < float(self._config.ai_score_threshold):
+                updates.setdefault("applicant_status", "rejected")
+                updates.setdefault("rejection_reason", self._config.ai_score_fail_reason)
+            elif "rejection_reason" not in updates and updates.get("applicant_status") not in {
+                "rejected",
+                None,
+            }:
+                updates["rejection_reason"] = None
 
         updated = await self._repository.update_admin_review(
             application_id=application_id,
@@ -326,3 +368,41 @@ class ApplicationService:
         if extension == ".docx":
             return self._config.max_docx_size_mb
         raise ApplicationValidationError(f"unsupported resume extension: {extension}")
+
+    def _build_keyword_query_from_opening(self, opening: JobOpeningRecord) -> str:
+        """Build simple prefilter keyword query derived from one job opening."""
+
+        stop_words = {item.casefold() for item in self._config.prefilter_stop_words}
+        source_text = " ".join(
+            [opening.role_title, *opening.requirements, *opening.responsibilities]
+        )
+        tokens = re.findall(r"[A-Za-z0-9\+\#\.]{2,}", source_text.casefold())
+        keywords: list[str] = []
+        seen: set[str] = set()
+        for token in tokens:
+            if len(token) < self._config.prefilter_min_keyword_length:
+                continue
+            if token.isdigit():
+                continue
+            if token in stop_words:
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            keywords.append(token)
+            if len(keywords) >= self._config.prefilter_max_keywords:
+                break
+        return " ".join(keywords)
+
+    @staticmethod
+    def _parse_experience_range(experience_range: str) -> tuple[float | None, float | None]:
+        """Parse experience range string like '2-4 years' into numeric bounds."""
+
+        years = re.findall(r"\d+", experience_range)
+        if len(years) < 2:
+            return None, None
+        lower = float(years[0])
+        upper = float(years[1])
+        if lower > upper:
+            return upper, lower
+        return lower, upper

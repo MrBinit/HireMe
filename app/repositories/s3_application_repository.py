@@ -12,7 +12,6 @@ from app.infra.s3_store import S3ObjectAlreadyExistsError, S3ObjectStore
 from app.repositories.application_repository import (
     ApplicationRepository,
     DuplicateApplicationError,
-    extract_parse_projection,
 )
 from app.schemas.application import ApplicationRecord
 from app.schemas.application import ApplicantStatus
@@ -76,6 +75,10 @@ class S3ApplicationRepository(ApplicationRepository):
         applicant_status: ApplicantStatus | None = None,
         submitted_from: datetime | None = None,
         submitted_to: datetime | None = None,
+        keyword_search: str | None = None,
+        min_total_years_experience: float | None = None,
+        max_total_years_experience: float | None = None,
+        experience_within_range: bool | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """List application records persisted in S3."""
 
@@ -98,6 +101,38 @@ class S3ApplicationRepository(ApplicationRepository):
                 continue
             if submitted_to is not None and record.created_at > submitted_to:
                 continue
+            if keyword_search:
+                parsed_search = (record.parsed_search_text or "").casefold()
+                keyword_terms = [
+                    term.casefold()
+                    for term in keyword_search.split()
+                    if term and len(term.strip()) >= 2
+                ]
+                if keyword_terms and not any(term in parsed_search for term in keyword_terms):
+                    continue
+            if min_total_years_experience is not None or max_total_years_experience is not None:
+                years = record.parsed_total_years_experience
+                is_within = True
+                if years is None:
+                    is_within = False
+                if (
+                    years is not None
+                    and min_total_years_experience is not None
+                    and years < min_total_years_experience
+                ):
+                    is_within = False
+                if (
+                    years is not None
+                    and max_total_years_experience is not None
+                    and years > max_total_years_experience
+                ):
+                    is_within = False
+                if experience_within_range is True and not is_within:
+                    continue
+                if experience_within_range is False and is_within:
+                    continue
+                if experience_within_range is None and not is_within:
+                    continue
             records.append(record)
         records.sort(key=lambda item: item.created_at, reverse=True)
         total = len(records)
@@ -118,21 +153,20 @@ class S3ApplicationRepository(ApplicationRepository):
         application_id: UUID,
         parse_status: ParseStatus,
         parse_result: dict | None,
+        parsed_total_years_experience: float | None = None,
+        parsed_search_text: str | None = None,
     ) -> bool:
         """Update parse fields for one S3-backed application record."""
 
         record = await self.get_by_id(application_id)
         if record is None:
             return False
-        projection = extract_parse_projection(parse_result)
         updated = record.model_copy(
             update={
                 "parse_status": parse_status,
                 "parse_result": parse_result,
-                "latest_position": projection["latest_position"],
-                "total_years_experience": projection["total_years_experience"],
-                "parsed_skills": projection["parsed_skills"],
-                "parsed_education": projection["parsed_education"],
+                "parsed_total_years_experience": parsed_total_years_experience,
+                "parsed_search_text": parsed_search_text,
             }
         )
         await self._store.put_json(
@@ -188,6 +222,8 @@ class S3ApplicationRepository(ApplicationRepository):
         update_payload: dict[str, Any] = {}
         if "applicant_status" in updates and updates["applicant_status"] is not None:
             update_payload["applicant_status"] = updates["applicant_status"]
+        if "rejection_reason" in updates:
+            update_payload["rejection_reason"] = updates["rejection_reason"]
         if "ai_score" in updates:
             update_payload["ai_score"] = updates["ai_score"]
         if "ai_screening_summary" in updates:

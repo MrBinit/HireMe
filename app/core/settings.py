@@ -19,15 +19,23 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./data/hireme.db"
     sqs_parse_queue_url: str | None = None
+    sqs_evaluation_queue_url: str | None = None
     sqs_endpoint_url: str | None = None
+    api_platform_config_path: Path = Path("app/config/api_platform_config.yaml")
     application_config_path: Path = Path("app/config/application_config.yaml")
     database_config_path: Path = Path("app/config/database_config.yaml")
     parse_config_path: Path = Path("app/config/parse_config.yaml")
     notification_config_path: Path = Path("app/config/notification_config.yaml")
     google_api_config_path: Path = Path("app/config/google_api.yaml")
     s3_config_path: Path = Path("app/config/s3_config.yaml")
+    bedrock_config_path: Path = Path("app/config/bedrock_config.yaml")
+    evaluation_config_path: Path = Path("app/config/evaluation_config.yaml")
     smtp_username: str | None = None
     smtp_password: str | None = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    bedrock_endpoint_url: str | None = None
     admin_jwt_secret: str | None = None
     admin_username: str | None = None
     admin_password: str | None = None

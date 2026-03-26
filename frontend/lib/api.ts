@@ -14,6 +14,8 @@ export type ApplicantStatus =
   | "accepted"
   | "sent_to_manager";
 
+export type EvaluationStatus = "queued" | "in_progress" | "completed" | "failed";
+
 export interface JobOpening {
   id: string;
   role_title: string;
@@ -46,6 +48,12 @@ export interface StatusHistoryEntry {
   source: string;
 }
 
+export interface ResumeDownloadResponse {
+  download_url: string;
+  expires_in_seconds: number;
+  filename: string;
+}
+
 export interface CandidateRecord {
   id: string;
   job_opening_id: string;
@@ -58,6 +66,7 @@ export interface CandidateRecord {
   role_selection: string;
   parse_result?: Record<string, unknown> | null;
   parse_status: string;
+  evaluation_status?: EvaluationStatus | null;
   applicant_status: ApplicantStatus;
   ai_score?: number | null;
   ai_screening_summary?: string | null;
@@ -110,4 +119,18 @@ export async function requestJson<T>(
   }
 
   return maybeJson as T;
+}
+
+export async function getAdminResumeDownloadUrl(
+  applicationId: string,
+  token: string,
+): Promise<ResumeDownloadResponse> {
+  return requestJson<ResumeDownloadResponse>(
+    `/api/v1/admin/candidates/${applicationId}/resume-download`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
 }

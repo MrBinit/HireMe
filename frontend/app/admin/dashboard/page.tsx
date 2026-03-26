@@ -4,7 +4,14 @@ import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { API_BASE, ApplicantStatus, CandidateRecord, JobOpening, readApiError } from "../../../lib/api";
+import {
+  API_BASE,
+  ApplicantStatus,
+  CandidateRecord,
+  JobOpening,
+  getAdminResumeDownloadUrl,
+  readApiError,
+} from "../../../lib/api";
 
 interface CandidateListResponse {
   items: CandidateRecord[];
@@ -35,6 +42,7 @@ export default function AdminDashboardPage() {
   const [openings, setOpenings] = useState<JobOpening[]>([]);
   const [candidates, setCandidates] = useState<CandidateRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [downloadingCandidateId, setDownloadingCandidateId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -56,6 +64,9 @@ export default function AdminDashboardPage() {
     () => [...new Set(openings.map((item) => item.role_title))].sort(),
     [openings],
   );
+  const totalPositions = roleOptions.length;
+  const openJobs = openings.filter((opening) => opening.status === "open").length;
+  const totalApplicants = candidates.length;
 
   const withAuth = (init: RequestInit = {}): RequestInit => ({
     ...init,
@@ -208,6 +219,20 @@ export default function AdminDashboardPage() {
     router.push("/admin");
   };
 
+  const onDownloadResume = async (candidateId: string) => {
+    if (!token) return;
+    setError("");
+    setDownloadingCandidateId(candidateId);
+    try {
+      const payload = await getAdminResumeDownloadUrl(candidateId, token);
+      window.open(payload.download_url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch resume download link");
+    } finally {
+      setDownloadingCandidateId("");
+    }
+  };
+
   return (
     <main className="stack">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -219,6 +244,21 @@ export default function AdminDashboardPage() {
 
       {message ? <p className="ok">{message}</p> : null}
       {error ? <p className="error">{error}</p> : null}
+
+      <section className="summary-grid">
+        <article className="panel summary-card">
+          <p className="muted">Job Positions</p>
+          <h2>{totalPositions}</h2>
+        </article>
+        <article className="panel summary-card">
+          <p className="muted">Open Jobs</p>
+          <h2>{openJobs}</h2>
+        </article>
+        <article className="panel summary-card">
+          <p className="muted">Applicants</p>
+          <h2>{totalApplicants}</h2>
+        </article>
+      </section>
 
       <section className="panel stack">
         <h2>Create Job Opening</h2>
@@ -355,16 +395,19 @@ export default function AdminDashboardPage() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Role</th>
+                <th>Position</th>
+                <th>Status</th>
+                <th>Evaluation</th>
+                <th>Email</th>
                 <th>Submission Date</th>
                 <th>AI Score</th>
-                <th>Status</th>
+                <th>Resume</th>
               </tr>
             </thead>
             <tbody>
               {!isLoading && candidates.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="muted">
+                  <td colSpan={9} className="muted">
                     No candidates found.
                   </td>
                 </tr>
@@ -375,9 +418,21 @@ export default function AdminDashboardPage() {
                     <Link href={`/admin/candidates/${candidate.id}`}>{candidate.full_name}</Link>
                   </td>
                   <td>{candidate.role_selection}</td>
+                  <td>{candidate.applicant_status}</td>
+                  <td>{candidate.evaluation_status || "-"}</td>
+                  <td>{candidate.email}</td>
                   <td>{new Date(candidate.created_at).toLocaleString()}</td>
                   <td>{candidate.ai_score ?? "-"}</td>
-                  <td>{candidate.applicant_status}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => onDownloadResume(candidate.id)}
+                      disabled={downloadingCandidateId === candidate.id}
+                    >
+                      {downloadingCandidateId === candidate.id ? "Loading..." : "Download"}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

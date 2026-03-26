@@ -14,44 +14,6 @@ class DuplicateApplicationError(ValueError):
     """Raised when an application duplicates an existing email+job opening pair."""
 
 
-def extract_parse_projection(parse_result: dict | None) -> dict[str, Any]:
-    """Extract denormalized parse-summary fields from parse_result JSON."""
-
-    if not isinstance(parse_result, dict):
-        return {
-            "latest_position": None,
-            "total_years_experience": None,
-            "parsed_skills": None,
-            "parsed_education": None,
-        }
-
-    structured = parse_result.get("structured")
-    if not isinstance(structured, dict):
-        return {
-            "latest_position": None,
-            "total_years_experience": None,
-            "parsed_skills": None,
-            "parsed_education": None,
-        }
-
-    position = structured.get("position")
-    years = structured.get("total_years_experience")
-    skills = structured.get("skills")
-    education = structured.get("education")
-
-    latest_position = position.strip() if isinstance(position, str) and position.strip() else None
-    total_years_experience = float(years) if isinstance(years, (int, float)) else None
-    parsed_skills = [str(item) for item in skills] if isinstance(skills, list) else None
-    parsed_education = education if isinstance(education, list) else None
-
-    return {
-        "latest_position": latest_position,
-        "total_years_experience": total_years_experience,
-        "parsed_skills": parsed_skills,
-        "parsed_education": parsed_education,
-    }
-
-
 class ApplicationRepository(ABC):
     """Persistence operations for candidate applications."""
 
@@ -78,6 +40,10 @@ class ApplicationRepository(ABC):
         applicant_status: ApplicantStatus | None = None,
         submitted_from: datetime | None = None,
         submitted_to: datetime | None = None,
+        keyword_search: str | None = None,
+        min_total_years_experience: float | None = None,
+        max_total_years_experience: float | None = None,
+        experience_within_range: bool | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """Return paginated applications and total count, optionally filtered by opening."""
 
@@ -96,6 +62,8 @@ class ApplicationRepository(ABC):
         application_id: UUID,
         parse_status: ParseStatus,
         parse_result: dict | None,
+        parsed_total_years_experience: float | None = None,
+        parsed_search_text: str | None = None,
     ) -> bool:
         """Update parse fields and return True when the record exists."""
 

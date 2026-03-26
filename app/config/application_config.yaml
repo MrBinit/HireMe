@@ -1,87 +1,3 @@
-api:
-  title: HireMe Hiring API
-  version: 0.1.0
-  description: Async backend for job openings and candidate applications.
-
-error:
-  request_validation_message: Request validation failed.
-  http_error_message: HTTP error occurred.
-  internal_error_message: An unexpected error occurred.
-  status_code_map:
-    400: bad_request
-    401: unauthorized
-    403: forbidden
-    404: not_found
-    409: conflict
-    422: unprocessable_entity
-    429: rate_limited
-    504: request_timeout
-
-security:
-  enabled: true
-  jwt_algorithm: HS256
-  required_role: admin
-  issuer: hireme-backend
-  audience: hireme-admin
-  access_token_exp_minutes: 120
-  leeway_seconds: 30
-
-cors:
-  enabled: true
-  allow_origins:
-    - http://localhost:3000
-  allow_methods:
-    - GET
-    - POST
-    - PATCH
-    - DELETE
-  allow_headers:
-    - Authorization
-    - Content-Type
-    - Accept
-  allow_credentials: false
-  expose_headers: []
-  max_age_seconds: 600
-
-security_headers:
-  enabled: true
-  x_content_type_options: nosniff
-  x_frame_options: DENY
-  referrer_policy: strict-origin-when-cross-origin
-  content_security_policy: "default-src 'none'; frame-ancestors 'none'; base-uri 'self';"
-  include_hsts: false
-  hsts_max_age_seconds: 31536000
-  hsts_include_subdomains: true
-  hsts_preload: false
-  csp_exempt_paths:
-    - /docs
-    - /openapi.json
-    - /redoc
-    - /docs/oauth2-redirect
-
-timeout:
-  enabled: true
-  seconds: 30
-  message: request timed out
-  exempt_paths:
-    - /health
-
-rate_limit:
-  enabled: true
-  window_seconds: 60
-  max_requests: 60
-  key_by_path: true
-  trust_x_forwarded_for: false
-  max_tracked_clients: 100000
-  cleanup_interval_seconds: 30
-  message: rate limit exceeded
-  exempt_paths:
-    - /health
-    - /docs
-    - /openapi.json
-    - /redoc
-    - /docs/oauth2-redirect
-
 job_opening:
   allowed_experience_levels:
     - intern
@@ -110,6 +26,7 @@ application:
   max_doc_size_mb: 10
   max_docx_size_mb: 10
   resume_chunk_size_bytes: 1048576
+  resume_download_url_expire_seconds: 900
   default_list_limit: 20
   max_list_limit: 100
   applications_not_open_message: applications have not opened yet
@@ -117,3 +34,31 @@ application:
   application_closed_message: Sorry, the application has already been closed for this role.
   invalid_resume_format_message: Invalid resume format. Please upload a PDF or DOCX file.
   duplicate_application_message: "duplicate application: this email has already applied to this job opening"
+  initial_screening_fail_reason: Candidate failed in initial screening.
+  ai_score_fail_reason: Candidate did not meet the AI score threshold.
+  ai_score_threshold: 70.0
+  prefilter_min_keyword_length: 3
+  prefilter_max_keywords: 24
+  prefilter_min_keyword_matches: 5
+  prefilter_min_skill_matches: 5
+  prefilter_max_search_text_chars: 8000
+  prefilter_stop_words:
+    - and
+    - the
+    - for
+    - with
+    - from
+    - that
+    - this
+    - will
+    - have
+    - has
+    - are
+    - you
+    - your
+    - our
+    - their
+    - role
+    - team
+    - years
+    - year

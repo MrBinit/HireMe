@@ -147,6 +147,35 @@ class S3ObjectStore:
 
         return await anyio.to_thread.run_sync(_run)
 
+    async def generate_presigned_get_url(
+        self,
+        *,
+        key: str,
+        expires_in_seconds: int,
+        bucket: str | None = None,
+        response_content_disposition: str | None = None,
+    ) -> str:
+        """Generate a temporary pre-signed GET URL for one object."""
+
+        target_bucket = bucket or self._bucket
+
+        def _run() -> str:
+            params: dict[str, Any] = {
+                "Bucket": target_bucket,
+                "Key": key,
+            }
+            if response_content_disposition:
+                params["ResponseContentDisposition"] = response_content_disposition
+            return str(
+                self._client.generate_presigned_url(
+                    "get_object",
+                    Params=params,
+                    ExpiresIn=max(60, expires_in_seconds),
+                )
+            )
+
+        return await anyio.to_thread.run_sync(_run)
+
     async def upload_fileobj(
         self,
         *,

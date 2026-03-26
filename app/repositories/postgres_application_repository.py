@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -14,7 +14,6 @@ from app.model.applicant_application import ApplicantApplication
 from app.repositories.application_repository import (
     ApplicationRepository,
     DuplicateApplicationError,
-    extract_parse_projection,
 )
 from app.schemas.application import ApplicationRecord
 from app.schemas.application import ApplicantStatus
@@ -49,6 +48,9 @@ class PostgresApplicationRepository(ApplicationRepository):
             resume_content_type=record.resume.content_type,
             resume_size_bytes=record.resume.size_bytes,
             parse_result=record.parse_result,
+            parsed_total_years_experience=record.parsed_total_years_experience,
+            parsed_search_text=record.parsed_search_text,
+            rejection_reason=record.rejection_reason,
             ai_score=record.ai_score,
             ai_screening_summary=record.ai_screening_summary,
             online_research_summary=record.online_research_summary,
@@ -56,11 +58,8 @@ class PostgresApplicationRepository(ApplicationRepository):
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else item
                 for item in record.status_history
             ],
-            parsed_skills=record.parsed_skills,
-            parsed_education=record.parsed_education,
-            latest_position=record.latest_position,
-            total_years_experience=record.total_years_experience,
             parse_status=record.parse_status,
+            evaluation_status=record.evaluation_status,
             applicant_status=record.applicant_status,
             reference_status=record.reference_status,
             created_at=record.created_at,
@@ -103,26 +102,27 @@ class PostgresApplicationRepository(ApplicationRepository):
         applicant_status: ApplicantStatus | None = None,
         submitted_from: datetime | None = None,
         submitted_to: datetime | None = None,
+        keyword_search: str | None = None,
+        min_total_years_experience: float | None = None,
+        max_total_years_experience: float | None = None,
+        experience_within_range: bool | None = None,
     ) -> tuple[list[ApplicationRecord], int]:
         """Return paginated applications with optional job-opening filter."""
 
+        filters = self._build_filters(
+            job_opening_id=job_opening_id,
+            role_selection=role_selection,
+            applicant_status=applicant_status,
+            submitted_from=submitted_from,
+            submitted_to=submitted_to,
+            keyword_search=keyword_search,
+            min_total_years_experience=min_total_years_experience,
+            max_total_years_experience=max_total_years_experience,
+            experience_within_range=experience_within_range,
+        )
+
         async with self._session_factory() as session:
-            count_stmt = select(func.count()).select_from(ApplicantApplication)
-            if job_opening_id is not None:
-                count_stmt = count_stmt.where(ApplicantApplication.job_opening_id == job_opening_id)
-            if role_selection is not None:
-                count_stmt = count_stmt.where(
-                    func.lower(ApplicantApplication.role_selection)
-                    == role_selection.strip().casefold()
-                )
-            if applicant_status is not None:
-                count_stmt = count_stmt.where(
-                    ApplicantApplication.applicant_status == applicant_status
-                )
-            if submitted_from is not None:
-                count_stmt = count_stmt.where(ApplicantApplication.created_at >= submitted_from)
-            if submitted_to is not None:
-                count_stmt = count_stmt.where(ApplicantApplication.created_at <= submitted_to)
+            count_stmt = select(func.count()).select_from(ApplicantApplication).where(*filters)
             total_result = await session.execute(count_stmt)
             total = int(total_result.scalar_one())
 
@@ -131,24 +131,8 @@ class PostgresApplicationRepository(ApplicationRepository):
                 .order_by(ApplicantApplication.created_at.desc())
                 .offset(offset)
                 .limit(limit)
+                .where(*filters)
             )
-            if job_opening_id is not None:
-                select_stmt = select_stmt.where(
-                    ApplicantApplication.job_opening_id == job_opening_id
-                )
-            if role_selection is not None:
-                select_stmt = select_stmt.where(
-                    func.lower(ApplicantApplication.role_selection)
-                    == role_selection.strip().casefold()
-                )
-            if applicant_status is not None:
-                select_stmt = select_stmt.where(
-                    ApplicantApplication.applicant_status == applicant_status
-                )
-            if submitted_from is not None:
-                select_stmt = select_stmt.where(ApplicantApplication.created_at >= submitted_from)
-            if submitted_to is not None:
-                select_stmt = select_stmt.where(ApplicantApplication.created_at <= submitted_to)
             result = await session.execute(select_stmt)
             entities = list(result.scalars().all())
             return [self._to_record(entity) for entity in entities], total
@@ -168,6 +152,8 @@ class PostgresApplicationRepository(ApplicationRepository):
         application_id: UUID,
         parse_status: ParseStatus,
         parse_result: dict | None,
+        parsed_total_years_experience: float | None = None,
+        parsed_search_text: str | None = None,
     ) -> bool:
         """Update parse status/result for one application."""
 
@@ -178,11 +164,8 @@ class PostgresApplicationRepository(ApplicationRepository):
 
             entity.parse_status = parse_status
             entity.parse_result = parse_result
-            projection = extract_parse_projection(parse_result)
-            entity.latest_position = projection["latest_position"]
-            entity.total_years_experience = projection["total_years_experience"]
-            entity.parsed_skills = projection["parsed_skills"]
-            entity.parsed_education = projection["parsed_education"]
+            entity.parsed_total_years_experience = parsed_total_years_experience
+            entity.parsed_search_text = parsed_search_text
             await session.commit()
             return True
 
@@ -235,6 +218,10 @@ class PostgresApplicationRepository(ApplicationRepository):
 
             if "applicant_status" in updates and updates["applicant_status"] is not None:
                 entity.applicant_status = updates["applicant_status"]
+            if "rejection_reason" in updates:
+                entity.rejection_reason = updates["rejection_reason"]
+            if "evaluation_status" in updates:
+                entity.evaluation_status = updates["evaluation_status"]
             if "ai_score" in updates:
                 entity.ai_score = updates["ai_score"]
             if "ai_screening_summary" in updates:
@@ -278,17 +265,17 @@ class PostgresApplicationRepository(ApplicationRepository):
             twitter_url=entity.twitter_url,
             role_selection=entity.role_selection,
             parse_result=entity.parse_result,
+            parsed_total_years_experience=entity.parsed_total_years_experience,
+            parsed_search_text=entity.parsed_search_text,
             parse_status=entity.parse_status,
+            evaluation_status=entity.evaluation_status,
             applicant_status=entity.applicant_status,
+            rejection_reason=entity.rejection_reason,
             ai_score=entity.ai_score,
             ai_screening_summary=entity.ai_screening_summary,
             online_research_summary=entity.online_research_summary,
             status_history=entity.status_history or [],
             reference_status=entity.reference_status,
-            latest_position=entity.latest_position,
-            total_years_experience=entity.total_years_experience,
-            parsed_skills=entity.parsed_skills,
-            parsed_education=entity.parsed_education,
             resume=ResumeFileMeta(
                 original_filename=entity.resume_original_filename,
                 stored_filename=entity.resume_stored_filename,
@@ -298,3 +285,78 @@ class PostgresApplicationRepository(ApplicationRepository):
             ),
             created_at=entity.created_at,
         )
+
+    @staticmethod
+    def _normalize_keyword_terms(keyword_search: str | None) -> list[str]:
+        """Normalize keyword search string into de-duplicated lowercase terms."""
+
+        if not keyword_search:
+            return []
+        seen: set[str] = set()
+        terms: list[str] = []
+        for raw in keyword_search.split():
+            term = raw.strip().casefold()
+            if len(term) < 2 or term in seen:
+                continue
+            seen.add(term)
+            terms.append(term)
+        return terms
+
+    def _build_filters(
+        self,
+        *,
+        job_opening_id: UUID | None,
+        role_selection: str | None,
+        applicant_status: ApplicantStatus | None,
+        submitted_from: datetime | None,
+        submitted_to: datetime | None,
+        keyword_search: str | None,
+        min_total_years_experience: float | None,
+        max_total_years_experience: float | None,
+        experience_within_range: bool | None,
+    ) -> list:
+        """Build SQLAlchemy where clauses for application listing filters."""
+
+        filters: list = []
+        if job_opening_id is not None:
+            filters.append(ApplicantApplication.job_opening_id == job_opening_id)
+        if role_selection is not None:
+            filters.append(
+                func.lower(ApplicantApplication.role_selection) == role_selection.strip().casefold()
+            )
+        if applicant_status is not None:
+            filters.append(ApplicantApplication.applicant_status == applicant_status)
+        if submitted_from is not None:
+            filters.append(ApplicantApplication.created_at >= submitted_from)
+        if submitted_to is not None:
+            filters.append(ApplicantApplication.created_at <= submitted_to)
+
+        terms = self._normalize_keyword_terms(keyword_search)
+        if terms:
+            normalized_search = func.lower(
+                func.coalesce(ApplicantApplication.parsed_search_text, "")
+            )
+            filters.append(or_(*[normalized_search.like(f"%{term}%") for term in terms]))
+
+        experience_column = ApplicantApplication.parsed_total_years_experience
+        if min_total_years_experience is not None or max_total_years_experience is not None:
+            within_parts = [experience_column.is_not(None)]
+            if min_total_years_experience is not None:
+                within_parts.append(experience_column >= min_total_years_experience)
+            if max_total_years_experience is not None:
+                within_parts.append(experience_column <= max_total_years_experience)
+            within_clause = and_(*within_parts)
+
+            if experience_within_range is True:
+                filters.append(within_clause)
+            elif experience_within_range is False:
+                outside_parts = [experience_column.is_(None)]
+                if min_total_years_experience is not None:
+                    outside_parts.append(experience_column < min_total_years_experience)
+                if max_total_years_experience is not None:
+                    outside_parts.append(experience_column > max_total_years_experience)
+                filters.append(or_(*outside_parts))
+            else:
+                filters.append(within_clause)
+
+        return filters

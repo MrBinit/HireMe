@@ -24,6 +24,7 @@ from app.services.application_service import ApplicationService, ApplicationVali
 from app.services.email_sender import (
     ApplicationConfirmationEmail,
     EmailSender,
+    InitialScreeningRejectionEmail,
     NoopEmailSender,
 )
 from app.services.job_opening_service import JobOpeningService
@@ -63,6 +64,12 @@ class _CaptureEmailSender(EmailSender):
     async def send_application_confirmation(
         self,
         payload: ApplicationConfirmationEmail,
+    ) -> None:
+        self.payloads.append(payload)
+
+    async def send_initial_screening_rejection(
+        self,
+        payload: InitialScreeningRejectionEmail,
     ) -> None:
         self.payloads.append(payload)
 
@@ -529,5 +536,132 @@ def test_admin_review_update_persists_ai_fields_and_history(tmp_path: Path) -> N
         assert updated.online_research_summary == "Open-source activity looks relevant."
         assert updated.status_history
         assert "Manual override" in (updated.status_history[-1].note or "")
+
+    asyncio.run(run())
+
+
+def test_prefilter_by_job_opening_returns_only_matching_candidates(tmp_path: Path) -> None:
+    """Prefilter should keep candidates within experience range and keyword match."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Backend Engineer {uuid4().hex[:6]}",
+        )
+
+        matching = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Prefilter Match",
+                email="prefilter-match@example.com",
+                linkedin_url="https://www.linkedin.com/in/prefilter-match",
+                portfolio_url="https://prefilter-match.dev",
+                github_url="https://github.com/prefilter-match",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        rejected = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Prefilter Reject",
+                email="prefilter-reject@example.com",
+                linkedin_url="https://www.linkedin.com/in/prefilter-reject",
+                portfolio_url="https://prefilter-reject.dev",
+                github_url="https://github.com/prefilter-reject",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        repo = app_service._repository  # noqa: SLF001
+        await repo.update_parse_state(
+            application_id=matching.id,
+            parse_status="completed",
+            parse_result={"skills": ["Python", "FastAPI"]},
+            parsed_total_years_experience=3.0,
+            parsed_search_text="python fastapi postgresql aws",
+        )
+        await repo.update_parse_state(
+            application_id=rejected.id,
+            parse_status="completed",
+            parse_result={"skills": ["Excel"]},
+            parsed_total_years_experience=1.0,
+            parsed_search_text="excel sales operations",
+        )
+
+        result = await app_service.list(
+            offset=0,
+            limit=10,
+            job_opening_id=opening.id,
+            prefilter_by_job_opening=True,
+        )
+
+        assert result.total == 1
+        assert len(result.items) == 1
+        assert str(result.items[0].email) == "prefilter-match@example.com"
+
+    asyncio.run(run())
+
+
+def test_prefilter_can_show_candidates_outside_experience_range(tmp_path: Path) -> None:
+    """Prefilter should support filtering outside job experience range."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Platform Engineer {uuid4().hex[:6]}",
+        )
+
+        in_range = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="In Range",
+                email="in-range@example.com",
+                linkedin_url="https://www.linkedin.com/in/in-range",
+                portfolio_url="https://in-range.dev",
+                github_url="https://github.com/in-range",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        out_range = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Out Range",
+                email="out-range@example.com",
+                linkedin_url="https://www.linkedin.com/in/out-range",
+                portfolio_url="https://out-range.dev",
+                github_url="https://github.com/out-range",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        repo = app_service._repository  # noqa: SLF001
+        await repo.update_parse_state(
+            application_id=in_range.id,
+            parse_status="completed",
+            parse_result={"skills": ["Python"]},
+            parsed_total_years_experience=3.0,
+            parsed_search_text="python fastapi",
+        )
+        await repo.update_parse_state(
+            application_id=out_range.id,
+            parse_status="completed",
+            parse_result={"skills": ["Python"]},
+            parsed_total_years_experience=6.0,
+            parsed_search_text="python fastapi",
+        )
+
+        result = await app_service.list(
+            offset=0,
+            limit=10,
+            job_opening_id=opening.id,
+            prefilter_by_job_opening=True,
+            experience_within_range=False,
+        )
+
+        assert result.total == 1
+        assert len(result.items) == 1
+        assert str(result.items[0].email) == "out-range@example.com"
 
     asyncio.run(run())

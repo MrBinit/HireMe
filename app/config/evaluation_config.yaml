@@ -1,0 +1,101 @@
+evaluation:
+  enabled: true
+  use_queue: true
+  provider: sqs
+  region: us-east-1
+  queue_name: hireme-llm-evaluation
+  enqueue_timeout_seconds: 2
+  worker_concurrency: 10
+  max_in_flight_per_worker: 10
+  receive_batch_size: 10
+  receive_wait_seconds: 20
+  visibility_timeout_seconds: 300
+  max_receive_count: 5
+  max_reason_chars: 500
+  max_work_summary_chars: 1500
+  summary_prompt_template: |
+    You are a hiring assistant.
+    Summarize the candidate work history into concise plain text for downstream scoring.
+
+    RULES:
+    - Use only provided data.
+    - Do not hallucinate.
+    - Keep it factual and compact.
+    - Max 6 lines.
+    - Include: role, company, period, key responsibilities/achievements.
+
+    INPUT WORK HISTORY JSON:
+    {work_history_json}
+
+    OUTPUT:
+    Return plain text summary only.
+  prompt_template: |
+    You are an AI hiring evaluator.
+
+    Your task is to score how well a candidate matches a job.
+
+    You MUST follow the scoring rules strictly.
+
+    ----------------------------------------
+    SCORING CRITERIA (TOTAL = 100)
+
+    1. Skills Match (0–40)
+    - Compare candidate skills with job requirements
+    - Strong overlap -> high score
+    - Partial overlap -> medium
+    - Weak -> low
+
+    2. Experience Match (0–30)
+    - Compare years of experience with required range
+    - Matching or exceeding -> high
+    - Slightly below -> medium
+    - Far below -> low
+
+    3. Education Match (0–10)
+    - Relevant degree -> high
+    - Related field -> medium
+    - Unrelated -> low
+
+    4. Role Alignment (0–20)
+    - Past roles similar to job role -> high
+    - Somewhat related -> medium
+    - Not aligned -> low
+
+    ----------------------------------------
+
+    INPUT:
+
+    CANDIDATE:
+    - Skills: {skills}
+    - Experience: {years} years
+    - Work History: {work_summary}
+    - Education: {education}
+
+    JOB:
+    - Role: {role}
+    - Required Skills: {required_skills}
+    - Experience Range: {min_exp}-{max_exp}
+    - Description: {job_description}
+
+    ----------------------------------------
+
+    OUTPUT FORMAT (STRICT JSON):
+
+    {
+      "score": number (0–100),
+      "breakdown": {
+        "skills": number,
+        "experience": number,
+        "education": number,
+        "role_alignment": number
+      },
+      "reason": "short explanation (max 3 sentences)"
+    }
+
+    ----------------------------------------
+
+    RULES:
+    - Do NOT exceed category limits
+    - Do NOT hallucinate missing data
+    - Be strict and realistic
+    - Prefer conservative scoring over generous scoring

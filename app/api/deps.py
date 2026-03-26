@@ -16,9 +16,11 @@ from app.core.security import (
 )
 from app.core.settings import get_settings
 from app.infra.database import get_async_session_factory
+from app.infra.bedrock_runtime import BedrockRuntimeClient
 from app.infra.s3_store import S3ObjectStore
 from app.infra.smtp_email_sender import SmtpEmailSender
 from app.infra.sqs_queue import SqsParseQueuePublisher
+from app.infra.sqs_queue import SqsEvaluationQueuePublisher
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.job_opening_repository import JobOpeningRepository
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
@@ -30,8 +32,13 @@ from app.services.admin_auth_service import AdminAuthService
 from app.services.email_sender import EmailSender, NoopEmailSender
 from app.services.job_opening_service import JobOpeningService
 from app.services.parse_queue import NoopParseQueuePublisher, ParseQueuePublisher
+from app.services.evaluation_queue import (
+    EvaluationQueuePublisher,
+    NoopEvaluationQueuePublisher,
+)
 from app.services.reference_service import ReferenceService
 from app.services.resume_storage import ResumeStorage, S3ResumeStorage
+from app.services.candidate_evaluation_service import CandidateEvaluationService
 
 _admin_bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -77,6 +84,22 @@ def get_resume_storage() -> ResumeStorage:
 
 
 @lru_cache(maxsize=1)
+def get_bedrock_runtime_client() -> BedrockRuntimeClient:
+    """Return cached Bedrock runtime client."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    return BedrockRuntimeClient(
+        region=runtime_config.bedrock.region,
+        max_retries=runtime_config.bedrock.max_retries,
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        aws_session_token=settings.aws_session_token,
+        endpoint_url=settings.bedrock_endpoint_url,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_parse_queue_publisher() -> ParseQueuePublisher:
     """Return parse queue publisher based on runtime config and env."""
 
@@ -95,6 +118,29 @@ def get_parse_queue_publisher() -> ParseQueuePublisher:
     return SqsParseQueuePublisher(
         queue_url=settings.sqs_parse_queue_url,
         region=runtime_config.parse.region,
+        endpoint_url=settings.sqs_endpoint_url,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_evaluation_queue_publisher() -> EvaluationQueuePublisher:
+    """Return evaluation queue publisher based on runtime config and env."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+
+    if not runtime_config.evaluation.use_queue:
+        return NoopEvaluationQueuePublisher()
+    if runtime_config.evaluation.provider != "sqs":
+        return NoopEvaluationQueuePublisher()
+    if not settings.sqs_evaluation_queue_url:
+        raise RuntimeError(
+            "SQS_EVALUATION_QUEUE_URL is required when evaluation.use_queue=true and provider=sqs"
+        )
+
+    return SqsEvaluationQueuePublisher(
+        queue_url=settings.sqs_evaluation_queue_url,
+        region=runtime_config.evaluation.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
 
@@ -119,8 +165,10 @@ def _build_smtp_sender(
         use_ssl=config.smtp.use_ssl,
         sender_name=config.sender_name,
         sender_email=config.sender_email,
-        subject_template=config.confirmation_subject_template,
-        body_template=config.confirmation_body_template,
+        confirmation_subject_template=config.confirmation_subject_template,
+        confirmation_body_template=config.confirmation_body_template,
+        rejection_subject_template=config.rejection_subject_template,
+        rejection_body_template=config.rejection_body_template,
     )
 
 
@@ -180,6 +228,21 @@ def get_application_service() -> ApplicationService:
 
 
 @lru_cache(maxsize=1)
+def get_candidate_evaluation_service() -> CandidateEvaluationService:
+    """Return cached candidate evaluation service backed by Bedrock."""
+
+    runtime_config = get_runtime_config()
+    return CandidateEvaluationService(
+        application_repository=get_application_repository(),
+        job_opening_repository=get_job_opening_repository(),
+        bedrock_client=get_bedrock_runtime_client(),
+        bedrock_config=runtime_config.bedrock,
+        evaluation_config=runtime_config.evaluation,
+        application_config=runtime_config.application,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_reference_service() -> ReferenceService:
     """Return cached reference service instance."""
 
@@ -205,6 +268,18 @@ def get_reference_service_dep() -> ReferenceService:
     """FastAPI dependency wrapper for reference service."""
 
     return get_reference_service()
+
+
+def get_candidate_evaluation_service_dep() -> CandidateEvaluationService:
+    """FastAPI dependency wrapper for candidate evaluation service."""
+
+    return get_candidate_evaluation_service()
+
+
+def get_evaluation_queue_publisher_dep() -> EvaluationQueuePublisher:
+    """FastAPI dependency wrapper for evaluation queue publisher."""
+
+    return get_evaluation_queue_publisher()
 
 
 @lru_cache(maxsize=1)
