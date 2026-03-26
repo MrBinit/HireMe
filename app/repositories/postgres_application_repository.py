@@ -55,6 +55,12 @@ class PostgresApplicationRepository(ApplicationRepository):
             ai_screening_summary=record.ai_screening_summary,
             candidate_brief=record.candidate_brief,
             online_research_summary=record.online_research_summary,
+            interview_schedule_status=record.interview_schedule_status,
+            interview_schedule_options=record.interview_schedule_options,
+            interview_schedule_sent_at=record.interview_schedule_sent_at,
+            interview_hold_expires_at=record.interview_hold_expires_at,
+            interview_calendar_email=record.interview_calendar_email,
+            interview_schedule_error=record.interview_schedule_error,
             status_history=[
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else item
                 for item in record.status_history
@@ -231,6 +237,18 @@ class PostgresApplicationRepository(ApplicationRepository):
                 entity.candidate_brief = updates["candidate_brief"]
             if "online_research_summary" in updates:
                 entity.online_research_summary = updates["online_research_summary"]
+            if "interview_schedule_status" in updates:
+                entity.interview_schedule_status = updates["interview_schedule_status"]
+            if "interview_schedule_options" in updates:
+                entity.interview_schedule_options = updates["interview_schedule_options"]
+            if "interview_schedule_sent_at" in updates:
+                entity.interview_schedule_sent_at = updates["interview_schedule_sent_at"]
+            if "interview_hold_expires_at" in updates:
+                entity.interview_hold_expires_at = updates["interview_hold_expires_at"]
+            if "interview_calendar_email" in updates:
+                entity.interview_calendar_email = updates["interview_calendar_email"]
+            if "interview_schedule_error" in updates:
+                entity.interview_schedule_error = updates["interview_schedule_error"]
 
             note = updates.get("note")
             if ("applicant_status" in updates and updates["applicant_status"] is not None) or note:
@@ -278,6 +296,12 @@ class PostgresApplicationRepository(ApplicationRepository):
             ai_screening_summary=entity.ai_screening_summary,
             candidate_brief=entity.candidate_brief,
             online_research_summary=entity.online_research_summary,
+            interview_schedule_status=entity.interview_schedule_status,
+            interview_schedule_options=entity.interview_schedule_options,
+            interview_schedule_sent_at=entity.interview_schedule_sent_at,
+            interview_hold_expires_at=entity.interview_hold_expires_at,
+            interview_calendar_email=entity.interview_calendar_email,
+            interview_schedule_error=entity.interview_schedule_error,
             status_history=entity.status_history or [],
             reference_status=entity.reference_status,
             resume=ResumeFileMeta(

@@ -22,6 +22,7 @@ from app.infra.smtp_email_sender import SmtpEmailSender
 from app.infra.sqs_queue import SqsParseQueuePublisher
 from app.infra.sqs_queue import SqsEvaluationQueuePublisher
 from app.infra.sqs_queue import SqsResearchQueuePublisher
+from app.infra.sqs_queue import SqsSchedulingQueuePublisher
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.job_opening_repository import JobOpeningRepository
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
@@ -40,6 +41,10 @@ from app.services.evaluation_queue import (
 from app.services.research_queue import (
     NoopResearchQueuePublisher,
     ResearchQueuePublisher,
+)
+from app.services.scheduling_queue import (
+    NoopSchedulingQueuePublisher,
+    SchedulingQueuePublisher,
 )
 from app.services.reference_service import ReferenceService
 from app.services.resume_storage import ResumeStorage, S3ResumeStorage
@@ -175,6 +180,31 @@ def get_research_queue_publisher() -> ResearchQueuePublisher:
     )
 
 
+@lru_cache(maxsize=1)
+def get_scheduling_queue_publisher() -> SchedulingQueuePublisher:
+    """Return scheduling queue publisher based on runtime config and env."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    scheduling = runtime_config.scheduling
+
+    if not scheduling.use_queue:
+        return NoopSchedulingQueuePublisher()
+    if scheduling.provider != "sqs":
+        return NoopSchedulingQueuePublisher()
+    if not settings.sqs_scheduling_queue_url:
+        raise RuntimeError(
+            "SQS_SCHEDULING_QUEUE_URL is required when "
+            "scheduling.use_queue=true and provider=sqs"
+        )
+
+    return SqsSchedulingQueuePublisher(
+        queue_url=settings.sqs_scheduling_queue_url,
+        region=scheduling.region,
+        endpoint_url=settings.sqs_endpoint_url,
+    )
+
+
 def _build_smtp_sender(
     *,
     config: NotificationRuntimeConfig,
@@ -199,6 +229,8 @@ def _build_smtp_sender(
         confirmation_body_template=config.confirmation_body_template,
         rejection_subject_template=config.rejection_subject_template,
         rejection_body_template=config.rejection_body_template,
+        interview_options_subject_template=config.interview_options_subject_template,
+        interview_options_body_template=config.interview_options_body_template,
     )
 
 
@@ -316,6 +348,12 @@ def get_research_queue_publisher_dep() -> ResearchQueuePublisher:
     """FastAPI dependency wrapper for research queue publisher."""
 
     return get_research_queue_publisher()
+
+
+def get_scheduling_queue_publisher_dep() -> SchedulingQueuePublisher:
+    """FastAPI dependency wrapper for scheduling queue publisher."""
+
+    return get_scheduling_queue_publisher()
 
 
 @lru_cache(maxsize=1)

@@ -73,6 +73,12 @@ export interface CandidateRecord {
   ai_screening_summary?: string | null;
   candidate_brief?: string | null;
   online_research_summary?: string | null;
+  interview_schedule_status?: string | null;
+  interview_schedule_options?: Record<string, unknown> | null;
+  interview_schedule_sent_at?: string | null;
+  interview_hold_expires_at?: string | null;
+  interview_calendar_email?: string | null;
+  interview_schedule_error?: string | null;
   status_history: StatusHistoryEntry[];
   reference_status: boolean;
   resume: ResumeMeta;

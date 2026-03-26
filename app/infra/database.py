@@ -131,6 +131,42 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             await connection.execute(
                 text(
                     "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS interview_schedule_status VARCHAR(30)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS interview_schedule_options JSONB"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS interview_schedule_sent_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS interview_hold_expires_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS interview_calendar_email VARCHAR(320)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS interview_schedule_error VARCHAR(1000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
                     "ADD COLUMN IF NOT EXISTS status_history JSONB NOT NULL DEFAULT '[]'::jsonb"
                 )
             )
@@ -166,8 +202,7 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             )
             await connection.execute(
                 text(
-                    "ALTER TABLE applicant_applications "
-                    "ALTER COLUMN portfolio_url DROP NOT NULL"
+                    "ALTER TABLE applicant_applications " "ALTER COLUMN portfolio_url DROP NOT NULL"
                 )
             )
             await connection.execute(
@@ -217,6 +252,13 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
                     "WHERE manager_email = 'unknown@hireme.local'"
                 )
             )
+            await connection.execute(
+                text(
+                    "UPDATE applicant_applications "
+                    "SET interview_schedule_status = 'interview_options_sent' "
+                    "WHERE interview_schedule_status IN ('options_sent', 'interview_email_sent')"
+                )
+            )
             await connection.execute(text("DROP INDEX IF EXISTS idx_applications_latest_position"))
             await connection.execute(
                 text("DROP INDEX IF EXISTS idx_applications_total_years_experience")
@@ -237,6 +279,12 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_applications_created_at "
                     "ON applicant_applications (created_at)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_interview_schedule_status "
+                    "ON applicant_applications (interview_schedule_status)"
                 )
             )
             await connection.execute(

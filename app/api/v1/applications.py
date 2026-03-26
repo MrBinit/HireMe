@@ -94,6 +94,7 @@ async def get_public_application_status(
         applicant_status=record.applicant_status,
         parse_status=record.parse_status,
         evaluation_status=record.evaluation_status,
+        interview_schedule_status=record.interview_schedule_status,
         ai_score=record.ai_score,
         role_selection=record.role_selection,
         submitted_at=record.created_at,

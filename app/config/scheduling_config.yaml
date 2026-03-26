@@ -1,0 +1,35 @@
+scheduling:
+  enabled: true
+  use_queue: true
+  provider: sqs
+  region: us-east-1
+  queue_name: hireme-interview-scheduling
+  enqueue_timeout_seconds: 2.0
+  worker_concurrency: 4
+  max_in_flight_per_worker: 4
+  receive_batch_size: 10
+  receive_wait_seconds: 20
+  visibility_timeout_seconds: 300
+  max_receive_count: 5
+  auto_enqueue_after_shortlist: true
+  target_statuses:
+    - shortlisted
+  min_slots: 3
+  max_slots: 5
+  slot_duration_minutes: 45
+  slot_step_minutes: 30
+  business_days_ahead: 5
+  business_hours_start_hour: 10
+  business_hours_end_hour: 17
+  min_notice_hours: 4
+  hold_expiry_hours: 24
+  timezone: Asia/Kathmandu
+  use_domain_wide_delegation: false
+  hold_event_title_template: "HireMe Interview Hold - {candidate_name} ({role_title})"
+  hold_event_description_template: |
+    Tentative interview hold created by HireMe.
+    Application ID: {application_id}
+    Candidate: {candidate_name}
+    Role: {role_title}
+    Hold expires at: {hold_expires_at}
+    Do not schedule conflicting meetings in this slot.

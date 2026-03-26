@@ -146,6 +146,12 @@ class ApplicationService:
             ai_screening_summary=None,
             candidate_brief=None,
             online_research_summary=None,
+            interview_schedule_status=None,
+            interview_schedule_options=None,
+            interview_schedule_sent_at=None,
+            interview_hold_expires_at=None,
+            interview_calendar_email=None,
+            interview_schedule_error=None,
             status_history=[
                 StatusHistoryEntry(
                     status="applied",

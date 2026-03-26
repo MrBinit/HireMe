@@ -11,6 +11,7 @@ from app.services.email_sender import (
     ApplicationConfirmationEmail,
     EmailSendError,
     EmailSender,
+    InterviewSlotOptionsEmail,
     InitialScreeningRejectionEmail,
 )
 
@@ -33,6 +34,8 @@ class SmtpEmailSender(EmailSender):
         confirmation_body_template: str,
         rejection_subject_template: str,
         rejection_body_template: str,
+        interview_options_subject_template: str,
+        interview_options_body_template: str,
     ):
         """Initialize SMTP sender with server and template settings."""
 
@@ -48,6 +51,8 @@ class SmtpEmailSender(EmailSender):
         self._confirmation_body_template = confirmation_body_template
         self._rejection_subject_template = rejection_subject_template
         self._rejection_body_template = rejection_body_template
+        self._interview_options_subject_template = interview_options_subject_template
+        self._interview_options_body_template = interview_options_body_template
 
     async def send_application_confirmation(
         self,
@@ -86,6 +91,28 @@ class SmtpEmailSender(EmailSender):
             subject_template=self._rejection_subject_template,
             body_template=self._rejection_body_template,
             error_message="failed to send rejection email",
+        )
+
+    async def send_interview_slot_options(
+        self,
+        payload: InterviewSlotOptionsEmail,
+    ) -> None:
+        """Send one interview-slot options email to shortlisted candidate."""
+
+        options_text = "\n".join(payload.slot_options)
+        variables = {
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+            "hold_expires_at": payload.hold_expires_at,
+            "slot_options": options_text,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._interview_options_subject_template,
+            body_template=self._interview_options_body_template,
+            error_message="failed to send interview slot options email",
         )
 
     async def _send_templated_email(

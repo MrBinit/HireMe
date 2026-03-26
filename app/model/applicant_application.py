@@ -58,6 +58,20 @@ class ApplicantApplication(Base):
     ai_screening_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     candidate_brief: Mapped[str | None] = mapped_column(String(1500), nullable=True)
     online_research_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    interview_schedule_status: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, index=True
+    )
+    interview_schedule_options: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    interview_schedule_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    interview_hold_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    interview_calendar_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    interview_schedule_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     status_history: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     parse_status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="pending", server_default="pending"

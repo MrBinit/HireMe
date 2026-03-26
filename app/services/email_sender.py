@@ -29,6 +29,17 @@ class InitialScreeningRejectionEmail:
     rejection_reason: str
 
 
+@dataclass(frozen=True)
+class InterviewSlotOptionsEmail:
+    """Payload for shortlisted candidate interview slot options email."""
+
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+    hold_expires_at: str
+    slot_options: list[str]
+
+
 class EmailSender(ABC):
     """Abstract email sender contract."""
 
@@ -50,6 +61,14 @@ class EmailSender(ABC):
 
         raise NotImplementedError
 
+    async def send_interview_slot_options(
+        self,
+        payload: InterviewSlotOptionsEmail,
+    ) -> None:
+        """Send interview slot options email for shortlisted candidates."""
+
+        _ = payload
+
 
 class NoopEmailSender(EmailSender):
     """No-op sender used when email is disabled or not configured."""
@@ -65,6 +84,14 @@ class NoopEmailSender(EmailSender):
     async def send_initial_screening_rejection(
         self,
         payload: InitialScreeningRejectionEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_interview_slot_options(
+        self,
+        payload: InterviewSlotOptionsEmail,
     ) -> None:
         """Accept payload without sending."""
 

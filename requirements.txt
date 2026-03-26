@@ -9,6 +9,8 @@ python-multipart==0.0.20
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 boto3==1.37.14
+google-api-python-client==2.175.0
+google-auth==2.40.3
 PyYAML==6.0.2
 anyio==4.8.0
 email-validator==2.2.0

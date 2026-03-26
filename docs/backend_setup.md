@@ -2,7 +2,8 @@
 
 ## Related Doc
 - DB/S3/SQS setup: `docs/db_setup.md`
-- Phase 02 implementation write-up: `docs/phase_02_hiring_intelligence_pipeline.md`
+- Phase 02 implementation write-up: `docs/hiring_intelligence_pipeline.md`
+- Phase 03 calendar orchestration write-up: `docs/phase_03_calendar_orchestration.md`
 
 ## Features implemented
 - Async FastAPI REST API for job openings and candidate applications.
@@ -14,6 +15,7 @@
   - Parse runtime/heading mapping in `app/config/parse_config.yaml`.
   - Bedrock runtime in `app/config/bedrock_config.yaml`.
   - LLM evaluation prompt in `app/config/evaluation_config.yaml`.
+  - Scheduling runtime in `app/config/scheduling_config.yaml`.
   - Email notification runtime in `app/config/notification_config.yaml`.
   - Google API non-secret metadata in `app/config/google_api.yaml`.
   - S3 settings in `app/config/s3_config.yaml`.
@@ -55,6 +57,13 @@
   - `parsed_total_years_experience`, `parsed_search_text` (fast prefilter columns)
   - `status_history` (for status timeline and admin override notes)
   - `reference_status` (default `false`, turns `true` when references are created via endpoint)
+  - interview scheduling fields:
+    - `interview_schedule_status`
+    - `interview_schedule_options`
+    - `interview_schedule_sent_at`
+    - `interview_hold_expires_at`
+    - `interview_calendar_email`
+    - `interview_schedule_error`
 - PostgreSQL persistence for:
   - `job_openings` table
   - `applicant_applications` table (includes `job_opening_id` UUID foreign key)
@@ -87,6 +96,7 @@
 - `PATCH /api/v1/admin/candidates/{application_id}/review` (admin AI fields + override note)
 - `POST /api/v1/admin/candidates/{application_id}/evaluate` (enqueue async LLM evaluation job, returns accepted response)
 - `POST /api/v1/admin/candidates/{application_id}/evaluate/queue` (alias for queue submit)
+- `POST /api/v1/admin/candidates/{application_id}/schedule` (enqueue async interview-slot orchestration)
 - `POST /api/v1/job-openings`
 - `GET /api/v1/job-openings`
 - `DELETE /api/v1/job-openings/{job_opening_id}`
@@ -153,6 +163,7 @@
   - `POST /api/v1/admin/candidates/{application_id}/evaluate/queue`
   - `POST /api/v1/admin/candidates/{application_id}/research`
   - `POST /api/v1/admin/candidates/{application_id}/research/queue`
+  - `POST /api/v1/admin/candidates/{application_id}/schedule`
   - `POST /api/v1/job-openings`
   - `DELETE /api/v1/job-openings/{job_opening_id}`
   - `PATCH /api/v1/job-openings/{job_opening_id}/pause`
@@ -173,9 +184,14 @@
 - SMTP credentials are read from `.env`:
   - `SMTP_USERNAME`
   - `SMTP_PASSWORD`
-- Google OAuth secrets are separate and optional for future Google API/OAuth use:
+- Google OAuth keys in `.env`:
   - `GOOGLE_CLIENT_ID`
   - `GOOGLE_CLIENT_SECRET`
+- Google OAuth refresh token (required if you use OAuth fallback for calendar):
+  - `GOOGLE_REFRESH_TOKEN`
+- Google Calendar scheduling uses service-account credentials:
+  - `GOOGLE_SERVICE_ACCOUNT_FILE` or `GOOGLE_SERVICE_ACCOUNT_JSON`
+  - (fallback option) OAuth set: `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` + `GOOGLE_REFRESH_TOKEN`
 
 ## Error format
 - All API errors use a standard payload:
@@ -201,6 +217,8 @@
 - Evaluation queue endpoint is read from `.env` as `SQS_EVALUATION_QUEUE_URL`.
 - Research enrichment queue runtime knobs are under `research.enrichment` in `app/config/research_config.yaml`.
 - Research enrichment queue endpoint is read from `.env` as `SQS_RESEARCH_QUEUE_URL`.
+- Interview scheduling queue runtime knobs are under `scheduling` in `app/config/scheduling_config.yaml`.
+- Interview scheduling queue endpoint is read from `.env` as `SQS_SCHEDULING_QUEUE_URL`.
 
 ## Workers
 - Run API and workers as separate processes:
@@ -216,6 +234,9 @@
   ```bash
   venv/bin/python -m app.scripts.sqs_research_enrichment_worker
   ```
+  ```bash
+  venv/bin/python -m app.scripts.sqs_scheduling_worker
+  ```
 - Submission path is fast and non-blocking for parsing:
   1) API stores applicant row in Postgres + resume in S3.
   2) API enqueues parse message to SQS.
@@ -228,6 +249,10 @@
   1) Admin triggers research endpoint.
   2) API enqueues enrichment message to SQS.
   3) Research worker runs LinkedIn/GitHub extractors + cross-check + LLM synthesis and writes compact JSON to `online_research_summary`.
+- Interview scheduling path is async and queue-backed:
+  1) Candidate is auto-shortlisted after evaluation threshold pass.
+  2) Evaluation worker enqueues scheduling message to SQS.
+  3) Scheduling worker fetches manager free/busy, creates 3-5 held 45-minute slots, and emails options to candidate.
 - Parse-first strategy:
   - first stage extracts raw text from PDF/DOCX
   - parse result stores compact structured fields only:
@@ -252,36 +277,48 @@
 5. Set `SQS_PARSE_QUEUE_URL` in `.env` to your parse queue URL.
 6. Set `SQS_EVALUATION_QUEUE_URL` in `.env` to your LLM evaluation queue URL.
 7. Set `SQS_RESEARCH_QUEUE_URL` in `.env` to your research enrichment queue URL.
-8. Set AWS credentials in `.env` (for S3/SQS/Bedrock):
+8. Set `SQS_SCHEDULING_QUEUE_URL` in `.env` to your interview scheduling queue URL.
+9. Set AWS credentials in `.env` (for S3/SQS/Bedrock):
    - `AWS_ACCESS_KEY_ID`
    - `AWS_SECRET_ACCESS_KEY`
    - optional: `AWS_SESSION_TOKEN`
    - optional: `BEDROCK_ENDPOINT_URL` (local/test override)
-9. Set SMTP credential keys in `.env` for confirmation emails:
+10. Set SMTP credential keys in `.env` for confirmation emails:
    - `SMTP_USERNAME`
    - `SMTP_PASSWORD`
-10. Set JWT secret in `.env`:
+11. Set Google Calendar credentials in `.env`:
+   - `GOOGLE_SERVICE_ACCOUNT_FILE` (recommended), or
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`
+   - OR OAuth fallback:
+     - `GOOGLE_CLIENT_ID`
+     - `GOOGLE_CLIENT_SECRET`
+     - `GOOGLE_REFRESH_TOKEN`
+12. Set JWT secret in `.env`:
    - `ADMIN_JWT_SECRET`
-11. Set admin login credentials in `.env`:
+13. Set admin login credentials in `.env`:
    - `ADMIN_USERNAME`
    - `ADMIN_PASSWORD_HASH` (recommended) or `ADMIN_PASSWORD` (fallback)
-12. Start API:
+14. Start API:
    ```bash
    venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-13. Start parse worker:
+15. Start parse worker:
    ```bash
    venv/bin/python -m app.scripts.sqs_worker
    ```
-14. Start evaluation worker:
+16. Start evaluation worker:
   ```bash
   venv/bin/python -m app.scripts.sqs_evaluation_worker
   ```
-15. Start research enrichment worker:
+17. Start research enrichment worker:
    ```bash
    venv/bin/python -m app.scripts.sqs_research_enrichment_worker
    ```
-16. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
+18. Start scheduling worker:
+   ```bash
+   venv/bin/python -m app.scripts.sqs_scheduling_worker
+   ```
+19. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
 
 ## Tests
 Run the test suite:

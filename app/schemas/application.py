@@ -77,6 +77,12 @@ class ApplicationRecord(BaseModel):
     ai_screening_summary: str | None = None
     candidate_brief: str | None = None
     online_research_summary: str | None = None
+    interview_schedule_status: str | None = None
+    interview_schedule_options: dict | None = None
+    interview_schedule_sent_at: datetime | None = None
+    interview_hold_expires_at: datetime | None = None
+    interview_calendar_email: str | None = None
+    interview_schedule_error: str | None = None
     status_history: list[StatusHistoryEntry] = Field(default_factory=list)
     reference_status: bool = False
     resume: ResumeFileMeta
@@ -109,6 +115,7 @@ class PublicApplicationStatusResponse(BaseModel):
     applicant_status: ApplicantStatus
     parse_status: ParseStatus
     evaluation_status: EvaluationStatus | None = None
+    interview_schedule_status: str | None = None
     ai_score: float | None = None
     role_selection: str
     submitted_at: datetime

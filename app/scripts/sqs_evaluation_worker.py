@@ -17,6 +17,7 @@ from app.infra.sqs_queue import (
     SqsMessage,
     SqsQueueClient,
     SqsResearchQueuePublisher,
+    SqsSchedulingQueuePublisher,
 )
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
 from app.repositories.postgres_job_opening_repository import PostgresJobOpeningRepository
@@ -26,6 +27,12 @@ from app.services.research_queue import (
     NoopResearchQueuePublisher,
     ResearchQueuePublishError,
     ResearchQueuePublisher,
+)
+from app.services.scheduling_queue import (
+    CandidateInterviewSchedulingJob,
+    NoopSchedulingQueuePublisher,
+    SchedulingQueuePublishError,
+    SchedulingQueuePublisher,
 )
 
 logging.basicConfig(
@@ -48,6 +55,10 @@ class SqsEvaluationWorker:
         research_queue_enabled: bool,
         research_target_statuses: set[str],
         research_enqueue_timeout_seconds: float,
+        scheduling_queue_publisher: SchedulingQueuePublisher | None = None,
+        scheduling_queue_enabled: bool = False,
+        scheduling_target_statuses: set[str] | None = None,
+        scheduling_enqueue_timeout_seconds: float = 2.0,
         ai_score_threshold: float,
         max_in_flight: int,
         receive_batch_size: int,
@@ -63,6 +74,12 @@ class SqsEvaluationWorker:
         self._research_queue_enabled = bool(research_queue_enabled)
         self._research_target_statuses = set(research_target_statuses)
         self._research_enqueue_timeout_seconds = max(0.1, research_enqueue_timeout_seconds)
+        self._scheduling_queue_publisher = (
+            scheduling_queue_publisher or NoopSchedulingQueuePublisher()
+        )
+        self._scheduling_queue_enabled = bool(scheduling_queue_enabled)
+        self._scheduling_target_statuses = set(scheduling_target_statuses or [])
+        self._scheduling_enqueue_timeout_seconds = max(0.1, scheduling_enqueue_timeout_seconds)
         self._ai_score_threshold = float(ai_score_threshold)
         self._max_in_flight = max(1, max_in_flight)
         self._receive_batch_size = max(1, min(receive_batch_size, 10))
@@ -157,9 +174,11 @@ class SqsEvaluationWorker:
                 )
             elif evaluation_score >= self._ai_score_threshold:
                 await self._enqueue_research_if_eligible(application_id)
+                await self._enqueue_scheduling_if_eligible(application_id)
             else:
                 logger.info(
-                    "evaluation worker application_id=%s research enqueue skipped ai_score=%s threshold=%s",
+                    "evaluation worker application_id=%s "
+                    "research enqueue skipped ai_score=%s threshold=%s",
                     application_id,
                     evaluation_score,
                     self._ai_score_threshold,
@@ -201,7 +220,8 @@ class SqsEvaluationWorker:
             return
         if candidate.ai_score is None or float(candidate.ai_score) < self._ai_score_threshold:
             logger.info(
-                "evaluation worker application_id=%s research enqueue skipped ai_score=%s threshold=%s",
+                "evaluation worker application_id=%s "
+                "research enqueue skipped ai_score=%s threshold=%s",
                 application_id,
                 candidate.ai_score,
                 self._ai_score_threshold,
@@ -209,7 +229,8 @@ class SqsEvaluationWorker:
             return
         if candidate.online_research_summary:
             logger.info(
-                "evaluation worker application_id=%s research enqueue skipped existing_summary=true",
+                "evaluation worker application_id=%s "
+                "research enqueue skipped existing_summary=true",
                 application_id,
             )
             return
@@ -238,6 +259,88 @@ class SqsEvaluationWorker:
         except Exception:
             logger.exception(
                 "evaluation worker application_id=%s unexpected research enqueue failure",
+                application_id,
+            )
+
+    async def _enqueue_scheduling_if_eligible(self, application_id: UUID) -> None:
+        """Queue interview scheduling after successful shortlist and threshold pass."""
+
+        if not self._scheduling_queue_enabled:
+            return
+
+        candidate = await self._application_repository.get_by_id(application_id)
+        if candidate is None:
+            logger.warning(
+                "evaluation worker application_id=%s missing while checking scheduling enqueue",
+                application_id,
+            )
+            return
+        if candidate.evaluation_status != "completed":
+            logger.info(
+                "evaluation worker application_id=%s "
+                "scheduling enqueue skipped evaluation_status=%s",
+                application_id,
+                candidate.evaluation_status,
+            )
+            return
+        if candidate.ai_score is None or float(candidate.ai_score) < self._ai_score_threshold:
+            logger.info(
+                "evaluation worker application_id=%s "
+                "scheduling enqueue skipped ai_score=%s threshold=%s",
+                application_id,
+                candidate.ai_score,
+                self._ai_score_threshold,
+            )
+            return
+        if candidate.interview_schedule_status in {
+            "queued",
+            "in_progress",
+            "interview_options_sent",
+            "interview_email_sent",
+            "options_sent",
+        }:
+            logger.info(
+                "evaluation worker application_id=%s "
+                "scheduling enqueue skipped interview_schedule_status=%s",
+                application_id,
+                candidate.interview_schedule_status,
+            )
+            return
+        if candidate.applicant_status not in self._scheduling_target_statuses:
+            logger.info(
+                "evaluation worker application_id=%s scheduling enqueue skipped status=%s allowed=%s",
+                application_id,
+                candidate.applicant_status,
+                sorted(self._scheduling_target_statuses),
+            )
+            return
+
+        job = CandidateInterviewSchedulingJob(
+            application_id=application_id,
+            queued_at=datetime.now(tz=timezone.utc),
+        )
+        try:
+            with anyio.fail_after(self._scheduling_enqueue_timeout_seconds):
+                await self._scheduling_queue_publisher.publish(job)
+            await self._application_repository.update_admin_review(
+                application_id=application_id,
+                updates={
+                    "interview_schedule_status": "queued",
+                    "interview_schedule_error": None,
+                },
+            )
+            logger.info(
+                "evaluation worker application_id=%s scheduling job queued",
+                application_id,
+            )
+        except (SchedulingQueuePublishError, TimeoutError):
+            logger.exception(
+                "evaluation worker application_id=%s failed to queue scheduling job",
+                application_id,
+            )
+        except Exception:
+            logger.exception(
+                "evaluation worker application_id=%s unexpected scheduling enqueue failure",
                 application_id,
             )
 
@@ -323,7 +426,29 @@ async def _run_worker() -> None:
         )
     elif runtime_config.research.enabled and enrichment_config.use_queue:
         logger.warning(
-            "research queue requested but unavailable; evaluation worker cannot auto-queue enrichment"
+            "research queue requested but unavailable; "
+            "evaluation worker cannot auto-queue enrichment"
+        )
+
+    scheduling_config = runtime_config.scheduling
+    scheduling_queue_enabled = (
+        scheduling_config.enabled
+        and scheduling_config.auto_enqueue_after_shortlist
+        and scheduling_config.use_queue
+        and scheduling_config.provider == "sqs"
+        and bool(settings.sqs_scheduling_queue_url)
+    )
+    scheduling_queue_publisher: SchedulingQueuePublisher = NoopSchedulingQueuePublisher()
+    if scheduling_queue_enabled and settings.sqs_scheduling_queue_url:
+        scheduling_queue_publisher = SqsSchedulingQueuePublisher(
+            queue_url=settings.sqs_scheduling_queue_url,
+            region=scheduling_config.region,
+            endpoint_url=settings.sqs_endpoint_url,
+        )
+    elif scheduling_config.enabled and scheduling_config.use_queue:
+        logger.warning(
+            "scheduling queue requested but unavailable; "
+            "evaluation worker cannot auto-queue interview scheduling"
         )
 
     worker = SqsEvaluationWorker(
@@ -334,6 +459,10 @@ async def _run_worker() -> None:
         research_queue_enabled=research_queue_enabled,
         research_target_statuses=set(enrichment_config.target_statuses),
         research_enqueue_timeout_seconds=enrichment_config.enqueue_timeout_seconds,
+        scheduling_queue_publisher=scheduling_queue_publisher,
+        scheduling_queue_enabled=scheduling_queue_enabled,
+        scheduling_target_statuses=set(scheduling_config.target_statuses),
+        scheduling_enqueue_timeout_seconds=scheduling_config.enqueue_timeout_seconds,
         ai_score_threshold=runtime_config.application.ai_score_threshold,
         max_in_flight=runtime_config.evaluation.max_in_flight_per_worker,
         receive_batch_size=runtime_config.evaluation.receive_batch_size,

@@ -25,5 +25,19 @@ notification:
 
     Regards,
     HireMe Team
+  interview_options_subject_template: "Congratulations - Technical Interview Scheduling ({role_title})"
+  interview_options_body_template: |
+    Hi {candidate_name},
+
+    Congratulations! You have cleared the screening for the {role_title} role and moved to the technical interview round.
+    Please review the available interview slots below and reply with your preferred option:
+
+    {slot_options}
+
+    These slots are held temporarily and will be released at {hold_expires_at} if not confirmed.
+    Once you confirm one slot, we will finalize your technical interview booking.
+
+    Regards,
+    HireMe Team
   send_timeout_seconds: 5
   fail_submission_on_send_error: false

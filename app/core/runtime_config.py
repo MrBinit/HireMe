@@ -468,6 +468,45 @@ class ResearchRuntimeConfig(BaseModel):
     enrichment: EnrichmentRuntimeConfig = Field(default_factory=EnrichmentRuntimeConfig)
 
 
+class SchedulingRuntimeConfig(BaseModel):
+    """Runtime config for interview slot orchestration and queue processing."""
+
+    enabled: bool = True
+    use_queue: bool = True
+    provider: Literal["sqs", "redis", "local"] = "sqs"
+    region: str = "us-east-1"
+    queue_name: str = "hireme-interview-scheduling"
+    enqueue_timeout_seconds: float = 2.0
+    worker_concurrency: int = 4
+    max_in_flight_per_worker: int = 4
+    receive_batch_size: int = 10
+    receive_wait_seconds: int = 20
+    visibility_timeout_seconds: int = 300
+    max_receive_count: int = 5
+    auto_enqueue_after_shortlist: bool = True
+    target_statuses: list[str] = Field(default_factory=lambda: ["shortlisted"])
+    min_slots: int = 3
+    max_slots: int = 5
+    slot_duration_minutes: int = 45
+    slot_step_minutes: int = 30
+    business_days_ahead: int = 5
+    business_hours_start_hour: int = 9
+    business_hours_end_hour: int = 17
+    min_notice_hours: int = 4
+    hold_expiry_hours: int = 24
+    timezone: str = "UTC"
+    use_domain_wide_delegation: bool = True
+    hold_event_title_template: str = "HireMe Interview Hold - {candidate_name} ({role_title})"
+    hold_event_description_template: str = (
+        "Tentative interview hold created by HireMe.\n"
+        "Application ID: {application_id}\n"
+        "Candidate: {candidate_name}\n"
+        "Role: {role_title}\n"
+        "Hold expires at: {hold_expires_at}\n"
+        "Do not schedule conflicting meetings in this slot."
+    )
+
+
 class NotificationRuntimeConfig(BaseModel):
     """Runtime config for application confirmation emails."""
 
@@ -495,6 +534,16 @@ class NotificationRuntimeConfig(BaseModel):
         "Hi {candidate_name},\n\n"
         "Thank you for applying to HireMe for the {role_title} role. "
         "After review, we will not be moving ahead with your resume this time.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    interview_options_subject_template: str = "Interview slot options - HireMe ({role_title})"
+    interview_options_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "You have been shortlisted for the {role_title} role.\n"
+        "Please reply with one preferred option from the list below:\n\n"
+        "{slot_options}\n\n"
+        "These slots are held temporarily on the interviewer's calendar and will expire at "
+        "{hold_expires_at}.\n\n"
         "Regards,\nHireMe Team"
     )
     send_timeout_seconds: float = 5.0
@@ -592,6 +641,7 @@ class RuntimeConfig(BaseModel):
     bedrock: BedrockRuntimeConfig = Field(default_factory=BedrockRuntimeConfig)
     evaluation: EvaluationRuntimeConfig = Field(default_factory=EvaluationRuntimeConfig)
     research: ResearchRuntimeConfig = Field(default_factory=ResearchRuntimeConfig)
+    scheduling: SchedulingRuntimeConfig = Field(default_factory=SchedulingRuntimeConfig)
     notification: NotificationRuntimeConfig = Field(default_factory=NotificationRuntimeConfig)
     google_api: GoogleApiRuntimeConfig = Field(default_factory=GoogleApiRuntimeConfig)
     cors: CorsRuntimeConfig = Field(default_factory=CorsRuntimeConfig)
@@ -617,6 +667,7 @@ def get_runtime_config() -> RuntimeConfig:
     bedrock_config_path = settings.bedrock_config_path
     evaluation_config_path = settings.evaluation_config_path
     research_config_path = settings.research_config_path
+    scheduling_config_path = settings.scheduling_config_path
 
     try:
         import yaml
@@ -644,6 +695,7 @@ def get_runtime_config() -> RuntimeConfig:
     raw_bedrock_config = _load_yaml(bedrock_config_path)
     raw_evaluation_config = _load_yaml(evaluation_config_path)
     raw_research_config = _load_yaml(research_config_path)
+    raw_scheduling_config = _load_yaml(scheduling_config_path)
 
     def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = dict(base)
@@ -703,5 +755,14 @@ def get_runtime_config() -> RuntimeConfig:
         )
     else:
         combined_config = _merge_dicts(combined_config, {"research": raw_research_config})
+    if "scheduling" in raw_scheduling_config and isinstance(
+        raw_scheduling_config["scheduling"], dict
+    ):
+        combined_config = _merge_dicts(
+            combined_config,
+            {"scheduling": raw_scheduling_config["scheduling"]},
+        )
+    else:
+        combined_config = _merge_dicts(combined_config, {"scheduling": raw_scheduling_config})
 
     return RuntimeConfig.model_validate(combined_config)

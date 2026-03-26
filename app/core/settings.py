@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     sqs_parse_queue_url: str | None = None
     sqs_evaluation_queue_url: str | None = None
     sqs_research_queue_url: str | None = None
+    sqs_scheduling_queue_url: str | None = None
     sqs_endpoint_url: str | None = None
     api_platform_config_path: Path = Path("app/config/api_platform_config.yaml")
     application_config_path: Path = Path("app/config/application_config.yaml")
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     bedrock_config_path: Path = Path("app/config/bedrock_config.yaml")
     evaluation_config_path: Path = Path("app/config/evaluation_config.yaml")
     research_config_path: Path = Path("app/config/research_config.yaml")
+    scheduling_config_path: Path = Path("app/config/scheduling_config.yaml")
     smtp_username: str | None = None
     smtp_password: str | None = None
     aws_access_key_id: str | None = None
@@ -47,6 +49,9 @@ class Settings(BaseSettings):
     referee_password_hash: str | None = None
     google_client_id: str | None = None
     google_client_secret: str | None = None
+    google_refresh_token: str | None = None
+    google_service_account_json: str | None = None
+    google_service_account_file: str | None = None
     serpapi_api_key: str | None = None
     github_api_token: str | None = None
     twitter_consumer_key: str | None = None

@@ -12,6 +12,7 @@ from app.api.deps import (
     get_candidate_evaluation_service_dep,
     get_evaluation_queue_publisher_dep,
     get_research_queue_publisher_dep,
+    get_scheduling_queue_publisher_dep,
     get_admin_principal,
     get_application_service_dep,
     get_s3_store,
@@ -28,7 +29,11 @@ from app.schemas.application import (
 )
 from app.schemas.auth import AdminAccessTokenResponse, AdminLoginPayload
 from app.infra.s3_store import S3ObjectStore
-from app.schemas.evaluation import CandidateEvaluationQueueResponse, CandidateResearchQueueResponse
+from app.schemas.evaluation import (
+    CandidateEvaluationQueueResponse,
+    CandidateResearchQueueResponse,
+    CandidateSchedulingQueueResponse,
+)
 from app.services.admin_auth_service import (
     AdminAuthConfigurationError,
     AdminAuthError,
@@ -45,6 +50,11 @@ from app.services.research_queue import (
     CandidateResearchEnrichmentJob,
     ResearchQueuePublishError,
     ResearchQueuePublisher,
+)
+from app.services.scheduling_queue import (
+    CandidateInterviewSchedulingJob,
+    SchedulingQueuePublishError,
+    SchedulingQueuePublisher,
 )
 
 router = APIRouter(tags=["admin"])
@@ -364,6 +374,26 @@ async def queue_candidate_research_enrichment(
     )
 
 
+@router.post(
+    "/admin/candidates/{application_id}/schedule",
+    response_model=CandidateSchedulingQueueResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def queue_candidate_interview_scheduling(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+    queue: SchedulingQueuePublisher = Depends(get_scheduling_queue_publisher_dep),
+) -> CandidateSchedulingQueueResponse:
+    """Enqueue interview scheduling orchestration for one candidate."""
+
+    return await _enqueue_candidate_scheduling(
+        application_id=application_id,
+        service=service,
+        queue=queue,
+    )
+
+
 async def _enqueue_candidate_research(
     *,
     application_id: UUID,
@@ -414,4 +444,81 @@ async def _enqueue_candidate_research(
         queued=True,
         queued_at=queued_at,
         queue_name=enrichment_config.queue_name,
+    )
+
+
+async def _enqueue_candidate_scheduling(
+    *,
+    application_id: UUID,
+    service: ApplicationService,
+    queue: SchedulingQueuePublisher,
+) -> CandidateSchedulingQueueResponse:
+    """Shared queue-enqueue implementation for interview scheduling route."""
+
+    runtime_config = get_runtime_config()
+    scheduling_config = runtime_config.scheduling
+    if not scheduling_config.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="interview scheduling is disabled",
+        )
+    if not scheduling_config.use_queue:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="interview scheduling queue is disabled",
+        )
+
+    candidate = await service.get_by_id(application_id)
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    if candidate.applicant_status not in set(scheduling_config.target_statuses):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "candidate status not eligible for interview scheduling queue; "
+                f"allowed={scheduling_config.target_statuses}"
+            ),
+        )
+
+    queued_at = datetime.now(tz=timezone.utc)
+    job = CandidateInterviewSchedulingJob(
+        application_id=application_id,
+        queued_at=queued_at,
+    )
+    try:
+        with anyio.fail_after(scheduling_config.enqueue_timeout_seconds):
+            await queue.publish(job)
+    except (SchedulingQueuePublishError, TimeoutError) as exc:
+        await service.update_admin_review(
+            application_id=application_id,
+            updates={
+                "interview_schedule_status": "failed",
+                "interview_schedule_error": "failed to queue scheduling job",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="failed to queue interview scheduling job",
+        ) from exc
+
+    updated = await service.update_admin_review(
+        application_id=application_id,
+        updates={
+            "interview_schedule_status": "queued",
+            "interview_schedule_error": None,
+        },
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return CandidateSchedulingQueueResponse(
+        application_id=application_id,
+        queued=True,
+        queued_at=queued_at,
+        queue_name=scheduling_config.queue_name,
     )

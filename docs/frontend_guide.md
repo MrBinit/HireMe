@@ -76,11 +76,13 @@ From `frontend/package.json`:
 - `POST /api/v1/admin/candidates/{id}/evaluate/queue` (alias)
 - `POST /api/v1/admin/candidates/{id}/research`
 - `POST /api/v1/admin/candidates/{id}/research/queue` (alias)
+- `POST /api/v1/admin/candidates/{id}/schedule`
 
 ## 4) Frontend Security/Operational Notes
 - Admin APIs are called with `Authorization: Bearer <token>`.
 - Resume downloads use backend-generated short-lived pre-signed S3 URLs.
 - Candidate evaluation is async/queue-backed; UI should poll/read `evaluation_status`.
+- Interview scheduling is async/queue-backed; UI can poll/read `interview_schedule_status`.
 - Candidate detail view parses `online_research_summary` JSON and shows:
   - 3-5 sentence brief
   - strengths/risks

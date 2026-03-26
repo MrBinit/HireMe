@@ -190,6 +190,18 @@ export default function CandidateProfilePage() {
         <p>
           <strong>Evaluation:</strong> {candidate.evaluation_status || "-"}
         </p>
+        <p>
+          <strong>Interview Scheduling:</strong> {candidate.interview_schedule_status || "-"}
+        </p>
+        <p>
+          <strong>Interview Email Sent At:</strong>{" "}
+          {candidate.interview_schedule_sent_at
+            ? new Date(candidate.interview_schedule_sent_at).toLocaleString()
+            : "-"}
+        </p>
+        <p>
+          <strong>Interview Scheduler Error:</strong> {candidate.interview_schedule_error || "-"}
+        </p>
       </section>
 
       <section className="panel stack">
