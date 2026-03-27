@@ -1073,8 +1073,8 @@ def test_manager_reject_sends_candidate_email_when_notifications_enabled(tmp_pat
     asyncio.run(run())
 
 
-def test_manager_decision_fails_before_interview_done(tmp_path: Path) -> None:
-    """Manager decision must be blocked when interview is not marked done."""
+def test_manager_decision_demo_override_allows_before_interview_done(tmp_path: Path) -> None:
+    """Demo override should allow manager decision before interview is marked done."""
 
     async def run() -> None:
         job_service, app_service = _build_service(tmp_path)
@@ -1094,18 +1094,13 @@ def test_manager_decision_fails_before_interview_done(tmp_path: Path) -> None:
             resume=_resume_file(),
         )
 
-        error = None
-        try:
-            await app_service.record_manager_decision(
-                application_id=created.id,
-                decision="reject",
-                note="Should fail because interview is pending.",
-            )
-        except ApplicationValidationError as exc:
-            error = exc
-
-        assert error is not None
-        assert "interview_schedule_status is interview_done" in str(error)
+        updated = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="reject",
+            note="Demo override allows pending interview decision.",
+        )
+        assert updated is not None
+        assert updated.manager_decision == "reject"
 
     asyncio.run(run())
 

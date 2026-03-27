@@ -429,10 +429,13 @@ class ApplicationService:
         candidate = await self._repository.get_by_id(application_id)
         if candidate is None:
             return None
-        if candidate.interview_schedule_status != "interview_done":
-            raise ApplicationValidationError(
-                "manager decision is allowed only when interview_schedule_status is interview_done"
-            )
+        # DEMO TEMPORARY OVERRIDE:
+        # Allow manager decision without waiting for interview_done.
+        # Restore the interview_done gate after demo.
+        # if candidate.interview_schedule_status != "interview_done":
+        #     raise ApplicationValidationError(
+        #         "manager decision is allowed only when interview_schedule_status is interview_done"
+        #     )
 
         decision_note = (note or "").strip() or None
         decision_time = datetime.now(tz=timezone.utc)
