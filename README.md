@@ -22,6 +22,19 @@ This project includes:
 - Email: SMTP-based notification service
 - Runtime/orchestration: Docker + docker-compose
 
+## Deployment (AWS)
+- Container registry: **AWS ECR** stores versioned Docker images for backend/frontend worker services.
+- Secrets handling: **AWS Secrets Manager** stores API keys, tokens, DB credentials, and integration secrets (DocuSign/Slack/Fireflies/etc.) instead of hardcoding in code or images.
+- Compute runtime: **AWS EC2 VM** runs pulled Docker images (from ECR) and starts application services.
+
+### Deployment flow
+1. Build Docker images for services.
+2. Push images to AWS ECR.
+3. Provision/update secrets in AWS Secrets Manager.
+4. On EC2, pull latest images from ECR.
+5. Inject secrets into runtime environment.
+6. Start/restart containers on EC2.
+
 ## AI Tools and Models Used
 - Primary LLM tasks (screening/research synthesis): AWS Bedrock primary model
 - Secondary LLM tasks (cost-optimized summarization/welcome): AWS Bedrock fallback model
