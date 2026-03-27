@@ -8,6 +8,7 @@ on:
 
 env:
   ECR_REPOSITORY: hireme-backend
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build_and_push:
@@ -19,10 +20,10 @@ jobs:
       image_uri: ${{ steps.image.outputs.image_uri }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure AWS credentials (OIDC role)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -37,7 +38,7 @@ jobs:
           aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and push linux/amd64 image
         id: image
@@ -59,7 +60,7 @@ jobs:
       contents: read
     steps:
       - name: Configure AWS credentials (OIDC role)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
