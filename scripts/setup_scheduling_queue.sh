@@ -5,18 +5,6 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 QUEUE_NAME="${QUEUE_NAME:-hireme-interview-scheduling}"
 DLQ_NAME="${DLQ_NAME:-${QUEUE_NAME}-dlq}"
 
-upsert_env() {
-  local key="$1"
-  local val="$2"
-  local env_file=".env"
-  local tmp_file
-  tmp_file="$(mktemp)"
-  touch "$env_file"
-  grep -v "^${key}=" "$env_file" > "$tmp_file" || true
-  echo "${key}=${val}" >> "$tmp_file"
-  mv "$tmp_file" "$env_file"
-}
-
 echo "Creating DLQ: ${DLQ_NAME}"
 DLQ_URL="$(aws sqs create-queue \
   --region "$AWS_REGION" \
@@ -42,9 +30,25 @@ aws sqs set-queue-attributes \
   --queue-url "$QUEUE_URL" \
   --attributes "{\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"${DLQ_ARN}\\\",\\\"maxReceiveCount\\\":\\\"5\\\"}\"}"
 
-upsert_env "AWS_REGION" "$AWS_REGION"
-upsert_env "SQS_SCHEDULING_QUEUE_URL" "$QUEUE_URL"
-upsert_env "SQS_SCHEDULING_QUEUE_NAME" "$QUEUE_NAME"
+if [[ ! -f "app/config/scheduling_config.yaml" ]]; then
+  echo "Missing app/config/scheduling_config.yaml"
+  exit 1
+fi
+
+sed -i '' "s#^  queue_name:.*#  queue_name: ${QUEUE_NAME}#g" app/config/scheduling_config.yaml
+if grep -q "^  queue_url:" app/config/scheduling_config.yaml; then
+  sed -i '' "s#^  queue_url:.*#  queue_url: \"${QUEUE_URL}\"#g" app/config/scheduling_config.yaml
+else
+  tmp_file="$(mktemp)"
+  awk -v queue_url="$QUEUE_URL" '
+    { print }
+    /^  queue_name:/ {
+      print "  queue_url: \"" queue_url "\""
+    }
+  ' app/config/scheduling_config.yaml > "$tmp_file"
+  mv "$tmp_file" app/config/scheduling_config.yaml
+fi
 
 echo "Queue ready"
 echo "QUEUE_URL=$QUEUE_URL"
+echo "Updated app/config/scheduling_config.yaml (scheduling.queue_name, scheduling.queue_url)"

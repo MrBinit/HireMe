@@ -167,13 +167,24 @@ class GoogleCalendarClient:
         if self._service_account_file:
             path = Path(self._service_account_file).expanduser()
             if not path.exists():
+                if self._has_oauth_credentials():
+                    return "oauth_refresh_token", None
                 raise GoogleCalendarAuthError(
                     f"GOOGLE_SERVICE_ACCOUNT_FILE not found: {path.as_posix()}"
                 )
             with path.open("r", encoding="utf-8") as handle:
-                payload = json.load(handle)
+                try:
+                    payload = json.load(handle)
+                except json.JSONDecodeError as exc:
+                    if self._has_oauth_credentials():
+                        return "oauth_refresh_token", None
+                    raise GoogleCalendarAuthError(
+                        "GOOGLE_SERVICE_ACCOUNT_FILE is not valid JSON"
+                    ) from exc
             if isinstance(payload, dict):
                 return "service_account", payload
+            if self._has_oauth_credentials():
+                return "oauth_refresh_token", None
             raise GoogleCalendarAuthError("GOOGLE_SERVICE_ACCOUNT_FILE must contain JSON object")
 
         if self._oauth_client_id and self._oauth_client_secret and self._oauth_refresh_token:

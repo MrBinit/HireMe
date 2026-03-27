@@ -28,6 +28,15 @@ from app.services.scheduling_queue import (
 )
 
 
+def _normalize_endpoint_url(value: str | None) -> str | None:
+    """Convert blank endpoint strings to None for boto client compatibility."""
+
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 class SqsParseQueuePublisher(ParseQueuePublisher):
     """Publish resume parse jobs to Amazon SQS."""
 
@@ -44,7 +53,7 @@ class SqsParseQueuePublisher(ParseQueuePublisher):
         self._client = boto3.client(
             "sqs",
             region_name=region,
-            endpoint_url=endpoint_url,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
         )
 
     async def publish(self, job: ResumeParseJob) -> None:
@@ -94,7 +103,7 @@ class SqsEvaluationQueuePublisher(EvaluationQueuePublisher):
         self._client = boto3.client(
             "sqs",
             region_name=region,
-            endpoint_url=endpoint_url,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
         )
 
     async def publish(self, job: CandidateEvaluationJob) -> None:
@@ -142,7 +151,7 @@ class SqsResearchQueuePublisher(ResearchQueuePublisher):
         self._client = boto3.client(
             "sqs",
             region_name=region,
-            endpoint_url=endpoint_url,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
         )
 
     async def publish(self, job: CandidateResearchEnrichmentJob) -> None:
@@ -190,7 +199,7 @@ class SqsSchedulingQueuePublisher(SchedulingQueuePublisher):
         self._client = boto3.client(
             "sqs",
             region_name=region,
-            endpoint_url=endpoint_url,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
         )
 
     async def publish(self, job: CandidateInterviewSchedulingJob) -> None:
@@ -247,7 +256,7 @@ class SqsQueueClient:
         self._client = boto3.client(
             "sqs",
             region_name=region,
-            endpoint_url=endpoint_url,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
         )
 
     async def receive_messages(

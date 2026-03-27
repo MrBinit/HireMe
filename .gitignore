@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+config/docker_runtime.local.yaml
 __pycache__/
 .pytest_cache/
 *.pyc
@@ -10,3 +11,5 @@ __pycache__/
 data
 *.json
 venv
+*.key
+tmp

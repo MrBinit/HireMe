@@ -39,6 +39,7 @@ class InterviewSlotOptionsEmail:
     hold_expires_at: str
     slot_options: list[str]
     slot_option_links: list[tuple[str, str]] = field(default_factory=list)
+    action_links: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,15 @@ class InterviewBookingConfirmedEmail:
 
 
 @dataclass(frozen=True)
+class InterviewParticipationThanksEmail:
+    """Payload for thank-you email after interview transcript is captured."""
+
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+
+
+@dataclass(frozen=True)
 class InterviewRescheduleOptionsEmail:
     """Payload for manager approval on alternative interview slots."""
 
@@ -63,6 +73,60 @@ class InterviewRescheduleOptionsEmail:
     slot_options: list[str]
     slot_option_links: list[tuple[str, str]] = field(default_factory=list)
     reject_link: str | None = None
+
+
+@dataclass(frozen=True)
+class OfferLetterCandidateEmail:
+    """Payload for sending candidate offer letter email with PDF attachment."""
+
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+    attachment_filename: str
+    offer_letter_pdf_bytes: bytes
+
+
+@dataclass(frozen=True)
+class ManagerDecisionRejectionEmail:
+    """Payload for manager-final rejection email after interview stage."""
+
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+
+
+@dataclass(frozen=True)
+class OfferLetterSignedAlertEmail:
+    """Payload for manager alert when candidate signs offer letter."""
+
+    manager_email: str
+    manager_name: str
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+
+
+@dataclass(frozen=True)
+class SlackWorkspaceInviteEmail:
+    """Payload for fallback Slack workspace invite-link email."""
+
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+    slack_invite_link: str
+
+
+@dataclass(frozen=True)
+class SlackJoinManagerAlertEmail:
+    """Payload for manager alert when candidate joins Slack onboarding."""
+
+    manager_email: str
+    manager_name: str
+    candidate_name: str
+    candidate_email: str
+    role_title: str
+    start_date: str
+    slack_joined_at: str
 
 
 class EmailSender(ABC):
@@ -110,11 +174,59 @@ class EmailSender(ABC):
 
         _ = payload
 
+    async def send_interview_participation_thanks(
+        self,
+        payload: InterviewParticipationThanksEmail,
+    ) -> None:
+        """Send thank-you email after interview completion."""
+
+        _ = payload
+
     async def send_interview_reschedule_options_to_manager(
         self,
         payload: InterviewRescheduleOptionsEmail,
     ) -> None:
         """Send alternative interview options to manager for approve/reject decision."""
+
+        _ = payload
+
+    async def send_offer_letter_to_candidate(
+        self,
+        payload: OfferLetterCandidateEmail,
+    ) -> None:
+        """Send offer letter email with attached PDF."""
+
+        _ = payload
+
+    async def send_manager_rejection_notice(
+        self,
+        payload: ManagerDecisionRejectionEmail,
+    ) -> None:
+        """Send final manager rejection email to candidate."""
+
+        _ = payload
+
+    async def send_offer_letter_signed_alert(
+        self,
+        payload: OfferLetterSignedAlertEmail,
+    ) -> None:
+        """Send immediate alert to manager once offer letter is signed."""
+
+        _ = payload
+
+    async def send_slack_workspace_invite(
+        self,
+        payload: SlackWorkspaceInviteEmail,
+    ) -> None:
+        """Send fallback Slack workspace invite-link email to candidate."""
+
+        _ = payload
+
+    async def send_slack_join_manager_alert(
+        self,
+        payload: SlackJoinManagerAlertEmail,
+    ) -> None:
+        """Send manager alert when candidate has joined Slack."""
 
         _ = payload
 
@@ -162,9 +274,57 @@ class NoopEmailSender(EmailSender):
 
         _ = payload
 
+    async def send_interview_participation_thanks(
+        self,
+        payload: InterviewParticipationThanksEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
     async def send_interview_reschedule_options_to_manager(
         self,
         payload: InterviewRescheduleOptionsEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_offer_letter_to_candidate(
+        self,
+        payload: OfferLetterCandidateEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_manager_rejection_notice(
+        self,
+        payload: ManagerDecisionRejectionEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_offer_letter_signed_alert(
+        self,
+        payload: OfferLetterSignedAlertEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_slack_workspace_invite(
+        self,
+        payload: SlackWorkspaceInviteEmail,
+    ) -> None:
+        """Accept payload without sending."""
+
+        _ = payload
+
+    async def send_slack_join_manager_alert(
+        self,
+        payload: SlackJoinManagerAlertEmail,
     ) -> None:
         """Accept payload without sending."""
 

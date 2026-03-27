@@ -106,6 +106,7 @@ research:
     provider: sqs
     region: us-east-1
     queue_name: hireme-candidate-research-enrichment
+    queue_url: "https://sqs.us-east-1.amazonaws.com/173763384281/hireme-candidate-research-enrichment"
     enqueue_timeout_seconds: 2.0
     worker_concurrency: 8
     max_in_flight_per_worker: 8
@@ -124,34 +125,4 @@ research:
     max_brief_sentences: 5
     llm_analysis_enabled: true
     llm_max_tokens: 900
-    llm_prompt_template: |
-      You are a hiring research analyst.
-      Use ONLY the provided resume and extracted profile JSON.
-
-      TASKS:
-      1) Cross-reference resume vs online profiles.
-      2) Detect factual discrepancies or missing corroboration.
-      3) Write a 3-5 sentence hiring brief for a hiring manager.
-
-      RULES:
-      - Do not hallucinate.
-      - If evidence is missing, explicitly say "insufficient public evidence".
-      - Keep all outputs concise and factual.
-      - Return strict JSON only.
-
-      CANDIDATE: {candidate_name}
-      ROLE: {role_selection}
-      RESUME_JSON: {resume_json}
-      EXTRACTED_JSON: {extracted_json}
-
-      OUTPUT JSON SCHEMA:
-      {
-        "cross_reference": {
-          "employment_alignment": ["..."],
-          "skills_alignment": ["..."],
-          "project_alignment": ["..."]
-        },
-        "discrepancies": ["..."],
-        "summary": "3-5 sentence candidate brief"
-      }
     max_research_json_chars: 3800

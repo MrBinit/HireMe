@@ -21,6 +21,7 @@ from app.infra.google_calendar_client import (
 )
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.job_opening_repository import JobOpeningRepository
+from app.services.fireflies_service import FirefliesService
 from app.services.email_sender import (
     EmailSendError,
     EmailSender,
@@ -42,6 +43,7 @@ class CandidateSlot:
 
 class InterviewSchedulingService:
     """Generate interview options, create tentative holds, and notify candidate."""
+
     _CONFIRMING_STALE_AFTER_SECONDS = 120
 
     def __init__(
@@ -54,6 +56,7 @@ class InterviewSchedulingService:
         config: SchedulingRuntimeConfig,
         security_config: SecurityRuntimeConfig,
         confirmation_token_secret: str | None,
+        fireflies_service: FirefliesService | None = None,
     ) -> None:
         """Initialize scheduling dependencies."""
 
@@ -68,6 +71,7 @@ class InterviewSchedulingService:
             if isinstance(confirmation_token_secret, str)
             else None
         )
+        self._fireflies_service = fireflies_service
 
     async def create_options_for_candidate(self, *, application_id: UUID) -> dict:
         """Create and email 3-5 held interview options for one shortlisted candidate."""
@@ -297,13 +301,37 @@ class InterviewSchedulingService:
             updated_payload["confirmed_event_id"] = confirmed_event.event_id
             updated_payload["confirmed_event_link"] = confirmed_event.html_link
             updated_payload["confirmed_meeting_link"] = confirmed_event.meeting_link
+            updated_payload["confirmed_start_at"] = confirmed_event.start_at.isoformat()
+            updated_payload["confirmed_end_at"] = confirmed_event.end_at.isoformat()
+            updated_payload["confirmed_manager_email"] = manager_email
             updated_payload["released_hold_event_ids"] = released_event_ids
+            if self._fireflies_service and self._fireflies_service.should_track_manager(
+                manager_email
+            ):
+                updated_payload["fireflies"] = self._fireflies_service.build_tracking_state(
+                    manager_email=manager_email,
+                    candidate_email=str(candidate.email),
+                    meeting_link=confirmed_event.meeting_link,
+                    confirmed_event_id=confirmed_event.event_id,
+                    confirmed_start_at=confirmed_event.start_at,
+                    confirmed_end_at=confirmed_event.end_at,
+                )
+                await self._request_fireflies_live_join(
+                    fireflies_payload=updated_payload["fireflies"],
+                    meeting_link=confirmed_event.meeting_link,
+                    candidate_name=candidate.full_name,
+                )
 
             updates: dict[str, Any] = {
                 "interview_schedule_status": self._config.booked_status,
                 "interview_schedule_options": updated_payload,
                 "interview_schedule_error": None,
             }
+            if "fireflies" in updated_payload:
+                updates["interview_transcript_status"] = "pending"
+                updates["interview_transcript_url"] = None
+                updates["interview_transcript_summary"] = None
+                updates["interview_transcript_synced_at"] = None
             if self._config.move_candidate_to_in_interview_on_booking:
                 updates["applicant_status"] = self._config.candidate_status_on_booking
                 updates["note"] = f"candidate confirmed interview slot option {option_number}"
@@ -432,12 +460,12 @@ class InterviewSchedulingService:
                 return refreshed
             return candidate
 
-        confirming_started_at = self._parse_datetime_safe(
-            str(payload.get("confirming_started_at"))
-        )
-        if confirming_started_at and (
-            now_utc - confirming_started_at
-        ).total_seconds() < self._CONFIRMING_STALE_AFTER_SECONDS:
+        confirming_started_at = self._parse_datetime_safe(str(payload.get("confirming_started_at")))
+        if (
+            confirming_started_at
+            and (now_utc - confirming_started_at).total_seconds()
+            < self._CONFIRMING_STALE_AFTER_SECONDS
+        ):
             raise ApplicationValidationError(
                 "selected slot is being confirmed by another request; please refresh status"
             )
@@ -483,9 +511,7 @@ class InterviewSchedulingService:
             )
             return True
 
-        hold_expires_at = self._extract_active_hold_expiry(
-            candidate_interview_payload=payload
-        )
+        hold_expires_at = self._extract_active_hold_expiry(candidate_interview_payload=payload)
         now_utc = datetime.now(tz=timezone.utc)
         if not force and hold_expires_at is not None and now_utc <= hold_expires_at:
             return False
@@ -607,9 +633,10 @@ class InterviewSchedulingService:
         candidate = await self._application_repository.get_by_id(application_id)
         if candidate is None:
             raise ApplicationValidationError("candidate application not found")
-        allowed_statuses = {
+        allowed_statuses = set(self._config.confirmable_statuses) | {
             self._config.booked_status,
             self._config.reschedule_requested_status,
+            self._config.reschedule_options_sent_status,
         }
         if candidate.interview_schedule_status not in allowed_statuses:
             raise ApplicationValidationError(
@@ -630,6 +657,16 @@ class InterviewSchedulingService:
         )
         delegated_user = self._delegated_user_for_manager(manager_email)
         confirmed_event_id = payload.get("confirmed_event_id")
+        if candidate.interview_schedule_status in (
+            set(self._config.confirmable_statuses) | {self._config.reschedule_options_sent_status}
+        ):
+            active_options = self._extract_active_options(candidate_interview_payload=payload)
+            await self._release_unselected_holds(
+                manager_email=manager_email,
+                delegated_user=delegated_user,
+                options=active_options if isinstance(active_options, list) else [],
+                selected_event_id="__none__",
+            )
         if candidate.interview_schedule_status == self._config.booked_status:
             if isinstance(confirmed_event_id, str) and confirmed_event_id.strip():
                 try:
@@ -644,7 +681,9 @@ class InterviewSchedulingService:
                         application_id,
                     )
 
-        reschedule = payload.get("reschedule") if isinstance(payload.get("reschedule"), dict) else {}
+        reschedule = (
+            payload.get("reschedule") if isinstance(payload.get("reschedule"), dict) else {}
+        )
         current_round = int(reschedule.get("round") or 0)
         if current_round >= self._config.max_reschedule_rounds:
             raise ApplicationValidationError("maximum reschedule rounds reached")
@@ -744,14 +783,18 @@ class InterviewSchedulingService:
             if isinstance(candidate.interview_schedule_options, dict)
             else {}
         )
-        reschedule = payload.get("reschedule") if isinstance(payload.get("reschedule"), dict) else {}
+        reschedule = (
+            payload.get("reschedule") if isinstance(payload.get("reschedule"), dict) else {}
+        )
         if not reschedule:
             raise ApplicationValidationError("reschedule options are not available")
         active_round = int(reschedule.get("round") or 0)
         if active_round <= 0:
             raise ApplicationValidationError("invalid reschedule round")
         if round_number is not None and round_number != active_round:
-            raise ApplicationValidationError("reschedule options are outdated; request latest options")
+            raise ApplicationValidationError(
+                "reschedule options are outdated; request latest options"
+            )
 
         options = reschedule.get("options")
         if not isinstance(options, list) or not options:
@@ -818,7 +861,9 @@ class InterviewSchedulingService:
             hold_expires_at = self._parse_datetime_safe(str(reschedule.get("hold_expires_at")))
             if hold_expires_at and now_utc > hold_expires_at:
                 await self.expire_candidate_holds(application_id=application_id, force=True)
-                raise ApplicationValidationError("reschedule options expired; request fresh options")
+                raise ApplicationValidationError(
+                    "reschedule options expired; request fresh options"
+                )
 
             hold_event_id = selected_option.get("hold_event_id")
             if not isinstance(hold_event_id, str) or not hold_event_id.strip():
@@ -862,6 +907,9 @@ class InterviewSchedulingService:
             payload["confirmed_event_id"] = confirmed_event.event_id
             payload["confirmed_event_link"] = confirmed_event.html_link
             payload["confirmed_meeting_link"] = confirmed_event.meeting_link
+            payload["confirmed_start_at"] = confirmed_event.start_at.isoformat()
+            payload["confirmed_end_at"] = confirmed_event.end_at.isoformat()
+            payload["confirmed_manager_email"] = manager_email
             payload["released_hold_event_ids"] = released_event_ids
             payload["reschedule"] = {
                 **reschedule,
@@ -869,11 +917,32 @@ class InterviewSchedulingService:
                 "accepted_option_number": option_number,
                 "released_hold_event_ids": released_event_ids,
             }
+            if self._fireflies_service and self._fireflies_service.should_track_manager(
+                manager_email
+            ):
+                payload["fireflies"] = self._fireflies_service.build_tracking_state(
+                    manager_email=manager_email,
+                    candidate_email=str(candidate.email),
+                    meeting_link=confirmed_event.meeting_link,
+                    confirmed_event_id=confirmed_event.event_id,
+                    confirmed_start_at=confirmed_event.start_at,
+                    confirmed_end_at=confirmed_event.end_at,
+                )
+                await self._request_fireflies_live_join(
+                    fireflies_payload=payload["fireflies"],
+                    meeting_link=confirmed_event.meeting_link,
+                    candidate_name=candidate.full_name,
+                )
             updates: dict[str, Any] = {
                 "interview_schedule_status": self._config.booked_status,
                 "interview_schedule_options": payload,
                 "interview_schedule_error": None,
             }
+            if "fireflies" in payload:
+                updates["interview_transcript_status"] = "pending"
+                updates["interview_transcript_url"] = None
+                updates["interview_transcript_summary"] = None
+                updates["interview_transcript_synced_at"] = None
             if self._config.move_candidate_to_in_interview_on_booking:
                 updates["applicant_status"] = self._config.candidate_status_on_booking
                 updates["note"] = (
@@ -970,9 +1039,7 @@ class InterviewSchedulingService:
                 now_utc=now_utc,
                 busy_intervals=busy_intervals,
                 max_results=(
-                    self._config.max_slots
-                    + len(excluded_slot_starts)
-                    + self._config.min_slots
+                    self._config.max_slots + len(excluded_slot_starts) + self._config.min_slots
                 ),
             )
             if slot.start_at.isoformat() not in excluded_slot_starts
@@ -1269,6 +1336,11 @@ class InterviewSchedulingService:
         tz = ZoneInfo(self._config.timezone)
         options: list[str] = []
         option_links: list[tuple[str, str]] = []
+        action_links = self._build_candidate_interview_action_links(
+            application_id=application_id,
+            candidate_email=candidate_email,
+            expires_at=hold_expires_at,
+        )
         for index, event in enumerate(hold_events, start=1):
             start_local = event.start_at.astimezone(tz)
             end_local = event.end_at.astimezone(tz)
@@ -1283,9 +1355,7 @@ class InterviewSchedulingService:
                 f"Option {index}: {start_local:%a, %d %b %Y %I:%M %p} - "
                 f"{end_local:%I:%M %p} ({self._config.timezone})"
             )
-            options.append(
-                f"{option_label}{suffix}"
-            )
+            options.append(f"{option_label}{suffix}")
             if confirmation_link:
                 option_links.append((option_label, confirmation_link))
 
@@ -1296,6 +1366,7 @@ class InterviewSchedulingService:
             hold_expires_at=hold_expires_at.astimezone(tz).strftime("%a, %d %b %Y %I:%M %p %Z"),
             slot_options=options,
             slot_option_links=option_links,
+            action_links=action_links,
         )
 
     def _build_email_payload_from_persisted_options(
@@ -1317,6 +1388,11 @@ class InterviewSchedulingService:
         tz = ZoneInfo(self._config.timezone)
         option_lines: list[str] = []
         option_links: list[tuple[str, str]] = []
+        action_links = self._build_candidate_interview_action_links(
+            application_id=application_id,
+            candidate_email=candidate_email,
+            expires_at=hold_expires_at,
+        )
         for item in options_raw:
             if not isinstance(item, dict):
                 continue
@@ -1358,7 +1434,31 @@ class InterviewSchedulingService:
             hold_expires_at=hold_expires_at.astimezone(tz).strftime("%a, %d %b %Y %I:%M %p %Z"),
             slot_options=option_lines,
             slot_option_links=option_links,
+            action_links=action_links,
         )
+
+    def _build_candidate_interview_action_links(
+        self,
+        *,
+        application_id: UUID,
+        candidate_email: str,
+        expires_at: datetime,
+    ) -> list[tuple[str, str]]:
+        """Build candidate CTA links for changing interview availability from email."""
+
+        reschedule_link = self._build_interview_action_link(
+            application_id=application_id,
+            actor="candidate",
+            action="request_reschedule",
+            expires_at=expires_at,
+            candidate_email=candidate_email,
+        )
+        if not reschedule_link:
+            return []
+        return [
+            ("Ask for another date", reschedule_link),
+            ("Cancel these slots", reschedule_link),
+        ]
 
     def _build_confirmation_link(
         self,
@@ -1645,3 +1745,47 @@ class InterviewSchedulingService:
         if self._config.use_domain_wide_delegation:
             return manager_email
         return None
+
+    async def _request_fireflies_live_join(
+        self,
+        *,
+        fireflies_payload: dict[str, Any],
+        meeting_link: str | None,
+        candidate_name: str,
+    ) -> None:
+        """Trigger Fireflies join immediately after booking (best-effort)."""
+
+        if self._fireflies_service is None or not self._fireflies_service.enabled:
+            return
+        if not isinstance(meeting_link, str) or not meeting_link.strip():
+            return
+
+        now_utc = datetime.now(tz=timezone.utc)
+        bot_request = (
+            dict(fireflies_payload.get("bot_request"))
+            if isinstance(fireflies_payload.get("bot_request"), dict)
+            else {}
+        )
+        bot_request["attempts"] = int(bot_request.get("attempts") or 0) + 1
+        bot_request["last_attempt_at"] = now_utc.isoformat()
+
+        try:
+            join_result = await self._fireflies_service.request_live_capture(
+                meeting_link=meeting_link,
+                title=f"HireMe interview - {candidate_name}",
+            )
+            if bool(join_result.get("success")):
+                bot_request["status"] = "requested"
+                bot_request["last_error"] = None
+                fireflies_payload["status"] = "processing"
+            else:
+                bot_request["status"] = "retry_pending"
+                bot_request["last_error"] = (
+                    str(join_result.get("error") or join_result.get("message"))
+                )[:500]
+        except Exception as exc:
+            bot_request["status"] = "retry_pending"
+            bot_request["last_error"] = str(exc)[:500]
+            logger.warning("failed to request Fireflies live join: %s", exc)
+
+        fireflies_payload["bot_request"] = bot_request

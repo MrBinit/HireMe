@@ -61,6 +61,34 @@ class PostgresApplicationRepository(ApplicationRepository):
             interview_hold_expires_at=record.interview_hold_expires_at,
             interview_calendar_email=record.interview_calendar_email,
             interview_schedule_error=record.interview_schedule_error,
+            interview_transcript_status=record.interview_transcript_status,
+            interview_transcript_url=record.interview_transcript_url,
+            interview_transcript_summary=record.interview_transcript_summary,
+            interview_transcript_synced_at=record.interview_transcript_synced_at,
+            manager_decision=record.manager_decision,
+            manager_decision_at=record.manager_decision_at,
+            manager_decision_note=record.manager_decision_note,
+            manager_selection_details=(
+                record.manager_selection_details.model_dump(mode="json")
+                if record.manager_selection_details is not None
+                else None
+            ),
+            manager_selection_template_output=record.manager_selection_template_output,
+            offer_letter_status=record.offer_letter_status,
+            offer_letter_storage_path=record.offer_letter_storage_path,
+            offer_letter_generated_at=record.offer_letter_generated_at,
+            offer_letter_sent_at=record.offer_letter_sent_at,
+            offer_letter_signed_at=record.offer_letter_signed_at,
+            offer_letter_error=record.offer_letter_error,
+            docusign_envelope_id=record.docusign_envelope_id,
+            slack_invite_status=record.slack_invite_status,
+            slack_invited_at=record.slack_invited_at,
+            slack_user_id=record.slack_user_id,
+            slack_joined_at=record.slack_joined_at,
+            slack_welcome_message=record.slack_welcome_message,
+            slack_welcome_sent_at=record.slack_welcome_sent_at,
+            slack_onboarding_status=record.slack_onboarding_status,
+            slack_error=record.slack_error,
             status_history=[
                 item.model_dump(mode="json") if hasattr(item, "model_dump") else item
                 for item in record.status_history
@@ -149,6 +177,23 @@ class PostgresApplicationRepository(ApplicationRepository):
 
         async with self._session_factory() as session:
             entity = await session.get(ApplicantApplication, application_id)
+            if entity is None:
+                return None
+            return self._to_record(entity)
+
+    async def get_latest_by_email(self, *, email: str) -> ApplicationRecord | None:
+        """Return latest application by normalized candidate email."""
+
+        normalized_email = email.strip().casefold()
+        async with self._session_factory() as session:
+            stmt = (
+                select(ApplicantApplication)
+                .where(func.lower(ApplicantApplication.email) == normalized_email)
+                .order_by(ApplicantApplication.created_at.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            entity = result.scalar_one_or_none()
             if entity is None:
                 return None
             return self._to_record(entity)
@@ -249,6 +294,54 @@ class PostgresApplicationRepository(ApplicationRepository):
                 entity.interview_calendar_email = updates["interview_calendar_email"]
             if "interview_schedule_error" in updates:
                 entity.interview_schedule_error = updates["interview_schedule_error"]
+            if "interview_transcript_status" in updates:
+                entity.interview_transcript_status = updates["interview_transcript_status"]
+            if "interview_transcript_url" in updates:
+                entity.interview_transcript_url = updates["interview_transcript_url"]
+            if "interview_transcript_summary" in updates:
+                entity.interview_transcript_summary = updates["interview_transcript_summary"]
+            if "interview_transcript_synced_at" in updates:
+                entity.interview_transcript_synced_at = updates["interview_transcript_synced_at"]
+            if "manager_decision" in updates:
+                entity.manager_decision = updates["manager_decision"]
+            if "manager_decision_at" in updates:
+                entity.manager_decision_at = updates["manager_decision_at"]
+            if "manager_decision_note" in updates:
+                entity.manager_decision_note = updates["manager_decision_note"]
+            if "manager_selection_details" in updates:
+                entity.manager_selection_details = updates["manager_selection_details"]
+            if "manager_selection_template_output" in updates:
+                entity.manager_selection_template_output = updates["manager_selection_template_output"]
+            if "offer_letter_status" in updates:
+                entity.offer_letter_status = updates["offer_letter_status"]
+            if "offer_letter_storage_path" in updates:
+                entity.offer_letter_storage_path = updates["offer_letter_storage_path"]
+            if "offer_letter_generated_at" in updates:
+                entity.offer_letter_generated_at = updates["offer_letter_generated_at"]
+            if "offer_letter_sent_at" in updates:
+                entity.offer_letter_sent_at = updates["offer_letter_sent_at"]
+            if "offer_letter_signed_at" in updates:
+                entity.offer_letter_signed_at = updates["offer_letter_signed_at"]
+            if "offer_letter_error" in updates:
+                entity.offer_letter_error = updates["offer_letter_error"]
+            if "docusign_envelope_id" in updates:
+                entity.docusign_envelope_id = updates["docusign_envelope_id"]
+            if "slack_invite_status" in updates:
+                entity.slack_invite_status = updates["slack_invite_status"]
+            if "slack_invited_at" in updates:
+                entity.slack_invited_at = updates["slack_invited_at"]
+            if "slack_user_id" in updates:
+                entity.slack_user_id = updates["slack_user_id"]
+            if "slack_joined_at" in updates:
+                entity.slack_joined_at = updates["slack_joined_at"]
+            if "slack_welcome_message" in updates:
+                entity.slack_welcome_message = updates["slack_welcome_message"]
+            if "slack_welcome_sent_at" in updates:
+                entity.slack_welcome_sent_at = updates["slack_welcome_sent_at"]
+            if "slack_onboarding_status" in updates:
+                entity.slack_onboarding_status = updates["slack_onboarding_status"]
+            if "slack_error" in updates:
+                entity.slack_error = updates["slack_error"]
 
             note = updates.get("note")
             if ("applicant_status" in updates and updates["applicant_status"] is not None) or note:
@@ -331,6 +424,30 @@ class PostgresApplicationRepository(ApplicationRepository):
             interview_hold_expires_at=entity.interview_hold_expires_at,
             interview_calendar_email=entity.interview_calendar_email,
             interview_schedule_error=entity.interview_schedule_error,
+            interview_transcript_status=entity.interview_transcript_status,
+            interview_transcript_url=entity.interview_transcript_url,
+            interview_transcript_summary=entity.interview_transcript_summary,
+            interview_transcript_synced_at=entity.interview_transcript_synced_at,
+            manager_decision=entity.manager_decision,
+            manager_decision_at=entity.manager_decision_at,
+            manager_decision_note=entity.manager_decision_note,
+            manager_selection_details=entity.manager_selection_details,
+            manager_selection_template_output=entity.manager_selection_template_output,
+            offer_letter_status=entity.offer_letter_status,
+            offer_letter_storage_path=entity.offer_letter_storage_path,
+            offer_letter_generated_at=entity.offer_letter_generated_at,
+            offer_letter_sent_at=entity.offer_letter_sent_at,
+            offer_letter_signed_at=entity.offer_letter_signed_at,
+            offer_letter_error=entity.offer_letter_error,
+            docusign_envelope_id=entity.docusign_envelope_id,
+            slack_invite_status=entity.slack_invite_status,
+            slack_invited_at=entity.slack_invited_at,
+            slack_user_id=entity.slack_user_id,
+            slack_joined_at=entity.slack_joined_at,
+            slack_welcome_message=entity.slack_welcome_message,
+            slack_welcome_sent_at=entity.slack_welcome_sent_at,
+            slack_onboarding_status=entity.slack_onboarding_status,
+            slack_error=entity.slack_error,
             status_history=entity.status_history or [],
             reference_status=entity.reference_status,
             resume=ResumeFileMeta(

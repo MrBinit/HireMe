@@ -56,6 +56,12 @@ class ApplicationRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_latest_by_email(self, *, email: str) -> ApplicationRecord | None:
+        """Return most recent application by candidate email, or None."""
+
+        raise NotImplementedError
+
+    @abstractmethod
     async def update_parse_state(
         self,
         *,

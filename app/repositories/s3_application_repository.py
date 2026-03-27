@@ -147,6 +147,16 @@ class S3ApplicationRepository(ApplicationRepository):
         payload = await self._store.get_json(key)
         return ApplicationRecord.model_validate(payload)
 
+    async def get_latest_by_email(self, *, email: str) -> ApplicationRecord | None:
+        """Return latest application by normalized candidate email."""
+
+        normalized_email = email.strip().casefold()
+        records, _ = await self.list(offset=0, limit=1000000)
+        for record in records:
+            if str(record.email).strip().casefold() == normalized_email:
+                return record
+        return None
+
     async def update_parse_state(
         self,
         *,
@@ -232,6 +242,72 @@ class S3ApplicationRepository(ApplicationRepository):
             update_payload["candidate_brief"] = updates["candidate_brief"]
         if "online_research_summary" in updates:
             update_payload["online_research_summary"] = updates["online_research_summary"]
+        if "evaluation_status" in updates:
+            update_payload["evaluation_status"] = updates["evaluation_status"]
+        if "interview_schedule_status" in updates:
+            update_payload["interview_schedule_status"] = updates["interview_schedule_status"]
+        if "interview_schedule_options" in updates:
+            update_payload["interview_schedule_options"] = updates["interview_schedule_options"]
+        if "interview_schedule_sent_at" in updates:
+            update_payload["interview_schedule_sent_at"] = updates["interview_schedule_sent_at"]
+        if "interview_hold_expires_at" in updates:
+            update_payload["interview_hold_expires_at"] = updates["interview_hold_expires_at"]
+        if "interview_calendar_email" in updates:
+            update_payload["interview_calendar_email"] = updates["interview_calendar_email"]
+        if "interview_schedule_error" in updates:
+            update_payload["interview_schedule_error"] = updates["interview_schedule_error"]
+        if "interview_transcript_status" in updates:
+            update_payload["interview_transcript_status"] = updates["interview_transcript_status"]
+        if "interview_transcript_url" in updates:
+            update_payload["interview_transcript_url"] = updates["interview_transcript_url"]
+        if "interview_transcript_summary" in updates:
+            update_payload["interview_transcript_summary"] = updates["interview_transcript_summary"]
+        if "interview_transcript_synced_at" in updates:
+            update_payload["interview_transcript_synced_at"] = updates[
+                "interview_transcript_synced_at"
+            ]
+        if "manager_decision" in updates:
+            update_payload["manager_decision"] = updates["manager_decision"]
+        if "manager_decision_at" in updates:
+            update_payload["manager_decision_at"] = updates["manager_decision_at"]
+        if "manager_decision_note" in updates:
+            update_payload["manager_decision_note"] = updates["manager_decision_note"]
+        if "manager_selection_details" in updates:
+            update_payload["manager_selection_details"] = updates["manager_selection_details"]
+        if "manager_selection_template_output" in updates:
+            update_payload["manager_selection_template_output"] = updates[
+                "manager_selection_template_output"
+            ]
+        if "offer_letter_status" in updates:
+            update_payload["offer_letter_status"] = updates["offer_letter_status"]
+        if "offer_letter_storage_path" in updates:
+            update_payload["offer_letter_storage_path"] = updates["offer_letter_storage_path"]
+        if "offer_letter_generated_at" in updates:
+            update_payload["offer_letter_generated_at"] = updates["offer_letter_generated_at"]
+        if "offer_letter_sent_at" in updates:
+            update_payload["offer_letter_sent_at"] = updates["offer_letter_sent_at"]
+        if "offer_letter_signed_at" in updates:
+            update_payload["offer_letter_signed_at"] = updates["offer_letter_signed_at"]
+        if "offer_letter_error" in updates:
+            update_payload["offer_letter_error"] = updates["offer_letter_error"]
+        if "docusign_envelope_id" in updates:
+            update_payload["docusign_envelope_id"] = updates["docusign_envelope_id"]
+        if "slack_invite_status" in updates:
+            update_payload["slack_invite_status"] = updates["slack_invite_status"]
+        if "slack_invited_at" in updates:
+            update_payload["slack_invited_at"] = updates["slack_invited_at"]
+        if "slack_user_id" in updates:
+            update_payload["slack_user_id"] = updates["slack_user_id"]
+        if "slack_joined_at" in updates:
+            update_payload["slack_joined_at"] = updates["slack_joined_at"]
+        if "slack_welcome_message" in updates:
+            update_payload["slack_welcome_message"] = updates["slack_welcome_message"]
+        if "slack_welcome_sent_at" in updates:
+            update_payload["slack_welcome_sent_at"] = updates["slack_welcome_sent_at"]
+        if "slack_onboarding_status" in updates:
+            update_payload["slack_onboarding_status"] = updates["slack_onboarding_status"]
+        if "slack_error" in updates:
+            update_payload["slack_error"] = updates["slack_error"]
 
         note = updates.get("note")
         if "applicant_status" in updates and updates["applicant_status"] is not None or note:

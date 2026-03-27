@@ -13,9 +13,15 @@ from app.services.email_sender import (
     EmailSendError,
     EmailSender,
     InterviewBookingConfirmedEmail,
+    InterviewParticipationThanksEmail,
     InterviewRescheduleOptionsEmail,
     InterviewSlotOptionsEmail,
     InitialScreeningRejectionEmail,
+    ManagerDecisionRejectionEmail,
+    OfferLetterSignedAlertEmail,
+    OfferLetterCandidateEmail,
+    SlackJoinManagerAlertEmail,
+    SlackWorkspaceInviteEmail,
 )
 
 
@@ -43,8 +49,20 @@ class SmtpEmailSender(EmailSender):
         interview_reminder_body_template: str,
         interview_confirmed_subject_template: str,
         interview_confirmed_body_template: str,
+        interview_thank_you_subject_template: str,
+        interview_thank_you_body_template: str,
         interview_reschedule_options_subject_template: str,
         interview_reschedule_options_body_template: str,
+        offer_letter_subject_template: str,
+        offer_letter_body_template: str,
+        manager_rejection_subject_template: str,
+        manager_rejection_body_template: str,
+        offer_signed_alert_subject_template: str,
+        offer_signed_alert_body_template: str,
+        slack_invite_subject_template: str,
+        slack_invite_body_template: str,
+        slack_joined_alert_subject_template: str,
+        slack_joined_alert_body_template: str,
     ):
         """Initialize SMTP sender with server and template settings."""
 
@@ -66,10 +84,22 @@ class SmtpEmailSender(EmailSender):
         self._interview_reminder_body_template = interview_reminder_body_template
         self._interview_confirmed_subject_template = interview_confirmed_subject_template
         self._interview_confirmed_body_template = interview_confirmed_body_template
+        self._interview_thank_you_subject_template = interview_thank_you_subject_template
+        self._interview_thank_you_body_template = interview_thank_you_body_template
         self._interview_reschedule_options_subject_template = (
             interview_reschedule_options_subject_template
         )
         self._interview_reschedule_options_body_template = interview_reschedule_options_body_template
+        self._offer_letter_subject_template = offer_letter_subject_template
+        self._offer_letter_body_template = offer_letter_body_template
+        self._manager_rejection_subject_template = manager_rejection_subject_template
+        self._manager_rejection_body_template = manager_rejection_body_template
+        self._offer_signed_alert_subject_template = offer_signed_alert_subject_template
+        self._offer_signed_alert_body_template = offer_signed_alert_body_template
+        self._slack_invite_subject_template = slack_invite_subject_template
+        self._slack_invite_body_template = slack_invite_body_template
+        self._slack_joined_alert_subject_template = slack_joined_alert_subject_template
+        self._slack_joined_alert_body_template = slack_joined_alert_body_template
 
     async def send_application_confirmation(
         self,
@@ -117,12 +147,16 @@ class SmtpEmailSender(EmailSender):
         """Send one interview-slot options email to shortlisted candidate."""
 
         options_text = "\n".join(payload.slot_options)
+        action_links_text = "\n".join(
+            f"{label}: {link}" for label, link in payload.action_links if link
+        )
         variables = {
             "candidate_name": payload.candidate_name,
             "candidate_email": payload.candidate_email,
             "role_title": payload.role_title,
             "hold_expires_at": payload.hold_expires_at,
             "slot_options": options_text,
+            "action_links": action_links_text,
         }
         await self._send_templated_email(
             recipient_email=payload.candidate_email,
@@ -152,12 +186,16 @@ class SmtpEmailSender(EmailSender):
         """Send reminder email when candidate has not selected a slot yet."""
 
         options_text = "\n".join(payload.slot_options)
+        action_links_text = "\n".join(
+            f"{label}: {link}" for label, link in payload.action_links if link
+        )
         variables = {
             "candidate_name": payload.candidate_name,
             "candidate_email": payload.candidate_email,
             "role_title": payload.role_title,
             "hold_expires_at": payload.hold_expires_at,
             "slot_options": options_text,
+            "action_links": action_links_text,
         }
         await self._send_templated_email(
             recipient_email=payload.candidate_email,
@@ -204,6 +242,25 @@ class SmtpEmailSender(EmailSender):
             error_message="failed to send interview booking confirmation email",
         )
 
+    async def send_interview_participation_thanks(
+        self,
+        payload: InterviewParticipationThanksEmail,
+    ) -> None:
+        """Send thank-you email after candidate completes interview."""
+
+        variables = {
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._interview_thank_you_subject_template,
+            body_template=self._interview_thank_you_body_template,
+            error_message="failed to send post-interview thank-you email",
+        )
+
     async def send_interview_reschedule_options_to_manager(
         self,
         payload: InterviewRescheduleOptionsEmail,
@@ -227,6 +284,113 @@ class SmtpEmailSender(EmailSender):
             error_message="failed to send interview reschedule options email",
         )
 
+    async def send_offer_letter_to_candidate(
+        self,
+        payload: OfferLetterCandidateEmail,
+    ) -> None:
+        """Send offer-letter email with attached PDF to candidate."""
+
+        variables = {
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._offer_letter_subject_template,
+            body_template=self._offer_letter_body_template,
+            attachment=(
+                payload.attachment_filename,
+                payload.offer_letter_pdf_bytes,
+                "application/pdf",
+            ),
+            error_message="failed to send offer letter email",
+        )
+
+    async def send_manager_rejection_notice(
+        self,
+        payload: ManagerDecisionRejectionEmail,
+    ) -> None:
+        """Send final manager rejection notice to candidate."""
+
+        variables = {
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._manager_rejection_subject_template,
+            body_template=self._manager_rejection_body_template,
+            error_message="failed to send manager rejection email",
+        )
+
+    async def send_offer_letter_signed_alert(
+        self,
+        payload: OfferLetterSignedAlertEmail,
+    ) -> None:
+        """Send immediate manager alert once candidate signs in DocuSign."""
+
+        variables = {
+            "manager_name": payload.manager_name,
+            "manager_email": payload.manager_email,
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.manager_email,
+            variables=variables,
+            subject_template=self._offer_signed_alert_subject_template,
+            body_template=self._offer_signed_alert_body_template,
+            error_message="failed to send offer signed alert email",
+        )
+
+    async def send_slack_workspace_invite(
+        self,
+        payload: SlackWorkspaceInviteEmail,
+    ) -> None:
+        """Send fallback Slack workspace invite-link email to candidate."""
+
+        variables = {
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+            "slack_invite_link": payload.slack_invite_link,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.candidate_email,
+            variables=variables,
+            subject_template=self._slack_invite_subject_template,
+            body_template=self._slack_invite_body_template,
+            error_message="failed to send Slack invite email",
+        )
+
+    async def send_slack_join_manager_alert(
+        self,
+        payload: SlackJoinManagerAlertEmail,
+    ) -> None:
+        """Send manager alert after candidate joins Slack workspace."""
+
+        variables = {
+            "manager_name": payload.manager_name,
+            "manager_email": payload.manager_email,
+            "candidate_name": payload.candidate_name,
+            "candidate_email": payload.candidate_email,
+            "role_title": payload.role_title,
+            "start_date": payload.start_date,
+            "slack_joined_at": payload.slack_joined_at,
+        }
+        await self._send_templated_email(
+            recipient_email=payload.manager_email,
+            variables=variables,
+            subject_template=self._slack_joined_alert_subject_template,
+            body_template=self._slack_joined_alert_body_template,
+            error_message="failed to send manager Slack-joined alert email",
+        )
+
     async def _send_templated_email(
         self,
         *,
@@ -235,6 +399,7 @@ class SmtpEmailSender(EmailSender):
         subject_template: str,
         body_template: str,
         html_body: str | None = None,
+        attachment: tuple[str, bytes, str] | None = None,
         error_message: str,
     ) -> None:
         """Render one template email and send over SMTP."""
@@ -248,6 +413,15 @@ class SmtpEmailSender(EmailSender):
         message.set_content(body)
         if html_body:
             message.add_alternative(html_body, subtype="html")
+        if attachment is not None:
+            filename, data, content_type = attachment
+            maintype, subtype = content_type.split("/", 1)
+            message.add_attachment(
+                data,
+                maintype=maintype,
+                subtype=subtype,
+                filename=filename,
+            )
 
         try:
             await anyio.to_thread.run_sync(self._send_sync, message)
@@ -275,10 +449,28 @@ class SmtpEmailSender(EmailSender):
             )
         else:
             option_rows = "".join(f"<li>{escape(option)}</li>" for option in payload.slot_options)
+        action_rows = "".join(
+            (
+                "<li>"
+                f"<a href=\"{escape(link, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">"
+                f"{escape(label)}"
+                "</a>"
+                "</li>"
+            )
+            for label, link in payload.action_links
+            if link
+        )
+        action_block = (
+            "<p>If these options do not work for you:</p>"
+            f"<ul>{action_rows}</ul>"
+            if action_rows
+            else ""
+        )
         return (
             f"<p>Hi {escape(payload.candidate_name)},</p>"
             f"<p>{intro_text}</p>"
             f"<ul>{option_rows}</ul>"
+            f"{action_block}"
             f"<p>{footer_text}</p>"
             "<p>Regards,<br/>HireMe Team</p>"
         )

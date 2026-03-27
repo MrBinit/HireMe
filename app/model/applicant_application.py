@@ -72,6 +72,52 @@ class ApplicantApplication(Base):
     )
     interview_calendar_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     interview_schedule_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    interview_transcript_status: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    interview_transcript_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    interview_transcript_summary: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    interview_transcript_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    manager_decision: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    manager_decision_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    manager_decision_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    manager_selection_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    manager_selection_template_output: Mapped[str | None] = mapped_column(
+        String(8000),
+        nullable=True,
+    )
+    offer_letter_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    offer_letter_storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    offer_letter_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    offer_letter_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    offer_letter_signed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    offer_letter_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    docusign_envelope_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    slack_invite_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    slack_invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    slack_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    slack_joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    slack_welcome_message: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    slack_welcome_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    slack_onboarding_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    slack_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     status_history: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     parse_status: Mapped[str] = mapped_column(
         String(30), nullable=False, default="pending", server_default="pending"

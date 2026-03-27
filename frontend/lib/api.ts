@@ -12,9 +12,23 @@ export type ApplicantStatus =
   | "in_progress"
   | "interview"
   | "accepted"
-  | "sent_to_manager";
+  | "sent_to_manager"
+  | "offer_letter_created"
+  | "offer_letter_sent"
+  | "offer_letter_sign";
 
 export type EvaluationStatus = "queued" | "in_progress" | "completed" | "failed";
+export type ManagerDecision = "select" | "reject";
+
+export interface ManagerSelectionDetails {
+  confirmed_job_title: string;
+  start_date: string;
+  base_salary: string;
+  compensation_structure: string;
+  equity_or_bonus?: string | null;
+  reporting_manager: string;
+  custom_terms?: string | null;
+}
 
 export interface JobOpening {
   id: string;
@@ -79,6 +93,30 @@ export interface CandidateRecord {
   interview_hold_expires_at?: string | null;
   interview_calendar_email?: string | null;
   interview_schedule_error?: string | null;
+  interview_transcript_status?: string | null;
+  interview_transcript_url?: string | null;
+  interview_transcript_summary?: string | null;
+  interview_transcript_synced_at?: string | null;
+  manager_decision?: ManagerDecision | null;
+  manager_decision_at?: string | null;
+  manager_decision_note?: string | null;
+  manager_selection_details?: ManagerSelectionDetails | null;
+  manager_selection_template_output?: string | null;
+  offer_letter_status?: string | null;
+  offer_letter_storage_path?: string | null;
+  offer_letter_generated_at?: string | null;
+  offer_letter_sent_at?: string | null;
+  offer_letter_signed_at?: string | null;
+  offer_letter_error?: string | null;
+  docusign_envelope_id?: string | null;
+  slack_invite_status?: string | null;
+  slack_invited_at?: string | null;
+  slack_user_id?: string | null;
+  slack_joined_at?: string | null;
+  slack_welcome_message?: string | null;
+  slack_welcome_sent_at?: string | null;
+  slack_onboarding_status?: string | null;
+  slack_error?: string | null;
   status_history: StatusHistoryEntry[];
   reference_status: boolean;
   resume: ResumeMeta;
@@ -115,6 +153,12 @@ export interface InterviewActionResponse {
   message: string;
   confirmed_event_link?: string | null;
   confirmed_meeting_link?: string | null;
+}
+
+export interface ManagerDecisionRequest {
+  decision: ManagerDecision;
+  note?: string | null;
+  selection_details?: ManagerSelectionDetails | null;
 }
 
 export interface ReferenceRecord {
@@ -197,6 +241,20 @@ export async function getAdminResumeDownloadUrl(
   );
 }
 
+export async function getAdminOfferLetterDownloadUrl(
+  applicationId: string,
+  token: string,
+): Promise<ResumeDownloadResponse> {
+  return requestJson<ResumeDownloadResponse>(
+    `/api/v1/admin/candidates/${applicationId}/offer-letter-download`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+}
+
 export async function confirmInterviewSlot(
   applicationId: string,
   payload: { email: string; option_number: number },
@@ -239,6 +297,69 @@ export async function processInterviewActionByToken(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ token }),
+    },
+  );
+}
+
+export async function submitManagerDecision(
+  applicationId: string,
+  token: string,
+  payload: ManagerDecisionRequest,
+): Promise<CandidateRecord> {
+  return requestJson<CandidateRecord>(
+    `/api/v1/admin/candidates/${applicationId}/manager-decision`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function approveOfferLetter(
+  applicationId: string,
+  token: string,
+): Promise<CandidateRecord> {
+  return requestJson<CandidateRecord>(
+    `/api/v1/admin/candidates/${applicationId}/offer-letter/approve`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+}
+
+export async function syncOfferLetterSignatureStatus(
+  applicationId: string,
+  token: string,
+): Promise<CandidateRecord> {
+  return requestJson<CandidateRecord>(
+    `/api/v1/admin/candidates/${applicationId}/offer-letter/sync-signature`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+}
+
+export async function retrySlackInvite(
+  applicationId: string,
+  token: string,
+): Promise<CandidateRecord> {
+  return requestJson<CandidateRecord>(
+    `/api/v1/admin/candidates/${applicationId}/slack/retry-invite`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     },
   );
 }

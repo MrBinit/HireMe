@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -19,14 +20,21 @@ from app.core.runtime_config import (
 from app.repositories.local_application_repository import LocalApplicationRepository
 from app.repositories.local_job_opening_repository import LocalJobOpeningRepository
 from app.schemas.application import ApplicationCreatePayload
+from app.schemas.application import ManagerSelectionDetails
 from app.schemas.job_opening import JobOpeningCreatePayload
 from app.services.application_service import ApplicationService, ApplicationValidationError
 from app.services.email_sender import (
     ApplicationConfirmationEmail,
     EmailSender,
     InitialScreeningRejectionEmail,
+    ManagerDecisionRejectionEmail,
     NoopEmailSender,
+    OfferLetterSignedAlertEmail,
+    OfferLetterCandidateEmail,
+    SlackWorkspaceInviteEmail,
 )
+from app.services.docusign_service import DocusignEnvelopeDispatch, DocusignWebhookEvent
+from app.services.slack_service import SlackInviteResult
 from app.services.job_opening_service import JobOpeningService
 from app.services.parse_queue import (
     NoopParseQueuePublisher,
@@ -60,6 +68,10 @@ class _CaptureEmailSender(EmailSender):
 
     def __init__(self) -> None:
         self.payloads = []
+        self.offer_payloads: list[OfferLetterCandidateEmail] = []
+        self.manager_rejection_payloads: list[ManagerDecisionRejectionEmail] = []
+        self.offer_signed_alert_payloads: list[OfferLetterSignedAlertEmail] = []
+        self.slack_invite_payloads: list[SlackWorkspaceInviteEmail] = []
 
     async def send_application_confirmation(
         self,
@@ -73,6 +85,157 @@ class _CaptureEmailSender(EmailSender):
     ) -> None:
         self.payloads.append(payload)
 
+    async def send_offer_letter_to_candidate(
+        self,
+        payload: OfferLetterCandidateEmail,
+    ) -> None:
+        self.offer_payloads.append(payload)
+
+    async def send_manager_rejection_notice(
+        self,
+        payload: ManagerDecisionRejectionEmail,
+    ) -> None:
+        self.manager_rejection_payloads.append(payload)
+
+    async def send_offer_letter_signed_alert(
+        self,
+        payload: OfferLetterSignedAlertEmail,
+    ) -> None:
+        self.offer_signed_alert_payloads.append(payload)
+
+    async def send_slack_workspace_invite(
+        self,
+        payload: SlackWorkspaceInviteEmail,
+    ) -> None:
+        self.slack_invite_payloads.append(payload)
+
+
+class _FakeS3Store:
+    """Test S3 store that keeps objects in memory."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    async def put_bytes(self, *, key: str, payload: bytes, content_type: str) -> None:
+        _ = content_type
+        self.objects[key] = payload
+
+    async def get_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
+        _ = bucket
+        return self.objects[key]
+
+
+class _FakeOfferLetterService:
+    """Test offer-letter service that captures generation requests."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def generate_offer_letter(self, *, candidate, selection_details) -> str:
+        self.calls.append((candidate.full_name, selection_details.confirmed_job_title))
+        return (
+            f"Subject: Offer of Employment - {selection_details.confirmed_job_title}\n\n"
+            f"Dear {candidate.full_name},\n\n"
+            "This is an AI-generated offer letter for review."
+        )
+
+
+class _FakeDocusignService:
+    """Test DocuSign service for envelope send + webhook events."""
+
+    def __init__(self, *, webhook_token: str = "valid-token") -> None:
+        self.enabled = True
+        self.webhook_token = webhook_token
+        self.send_calls: list[tuple[str, str]] = []
+        self.next_event = DocusignWebhookEvent(
+            envelope_id="env-123",
+            status="completed",
+            raw={"status": "completed"},
+        )
+
+    async def send_offer_for_signature(
+        self,
+        *,
+        application_id,
+        candidate_name,
+        candidate_email,
+        role_title,
+        pdf_bytes,
+    ) -> DocusignEnvelopeDispatch:
+        _ = (application_id, role_title, pdf_bytes)
+        self.send_calls.append((candidate_name, candidate_email))
+        return DocusignEnvelopeDispatch(envelope_id="env-123", status="sent")
+
+    def validate_webhook_secret(self, *, token: str | None) -> None:
+        if token != self.webhook_token:
+            raise ApplicationValidationError("invalid DocuSign webhook token")
+
+    def parse_webhook_event(self, *, raw_body: bytes, content_type: str | None) -> DocusignWebhookEvent:
+        _ = (raw_body, content_type)
+        return self.next_event
+
+
+class _FakeSlackService:
+    """Test Slack service for invite + webhook + messaging flow."""
+
+    def __init__(self, *, fail_invite: bool = False) -> None:
+        self.enabled = True
+        self.fail_invite = fail_invite
+        self.invite_calls: list[tuple[str, str, str]] = []
+        self.dm_calls: list[tuple[str, str]] = []
+        self.hr_calls: list[str] = []
+        self.onboarding_resource_links = [
+            "https://intranet.hireme.ai/onboarding",
+            "https://intranet.hireme.ai/handbook",
+        ]
+
+    def validate_event_signature(self, *, headers, raw_body: bytes) -> None:
+        _ = (headers, raw_body)
+        return
+
+    def parse_event_payload(self, *, raw_body: bytes) -> dict:
+        return json.loads(raw_body.decode("utf-8"))
+
+    async def invite_candidate(
+        self,
+        *,
+        candidate_email: str,
+        candidate_name: str,
+        role_title: str,
+    ) -> SlackInviteResult:
+        if self.fail_invite:
+            raise ApplicationValidationError("slack invite blocked on this workspace plan")
+        self.invite_calls.append((candidate_email, candidate_name, role_title))
+        return SlackInviteResult(status="invited")
+
+    async def send_direct_message(self, *, user_id: str, text: str) -> None:
+        self.dm_calls.append((user_id, text))
+
+    async def notify_hr_channel(self, *, text: str) -> None:
+        self.hr_calls.append(text)
+
+
+class _FakeSlackWelcomeService:
+    """Test AI welcome service that returns deterministic personalized text."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def generate_welcome_message(
+        self,
+        *,
+        candidate,
+        manager_name: str,
+        onboarding_links: list[str],
+    ) -> str:
+        _ = onboarding_links
+        self.calls.append((candidate.full_name, manager_name))
+        return (
+            f"Welcome {candidate.full_name}! "
+            f"Your role is {candidate.role_selection}. "
+            f"Your manager {manager_name or 'Hiring Manager'} is excited to have you onboard."
+        )
+
 
 def _build_service(
     tmp_path: Path,
@@ -81,6 +244,12 @@ def _build_service(
     parse_queue_publisher: ParseQueuePublisher | None = None,
     notification_config: NotificationRuntimeConfig | None = None,
     email_sender: EmailSender | None = None,
+    offer_letter_service=None,
+    docusign_service=None,
+    slack_service=None,
+    slack_welcome_service=None,
+    s3_store=None,
+    slack_invite_fallback_join_url: str | None = None,
 ) -> tuple[JobOpeningService, ApplicationService]:
     """Create service instances backed by temp local JSON storage."""
 
@@ -94,12 +263,36 @@ def _build_service(
     app_service = ApplicationService(
         repository=app_repo,
         job_opening_repository=job_repo,
-        config=ApplicationRuntimeConfig(),
+        config=ApplicationRuntimeConfig(
+            slack_invite_fallback_join_url=slack_invite_fallback_join_url or "",
+            manager_selection_template=(
+                "Subject: Offer of Employment - {confirmed_job_title}\n\n"
+                "Dear {candidate_name},\n\n"
+                "We are pleased to offer you the position of {confirmed_job_title} at HireMe, "
+                "based on your application for {role_applied}. This letter confirms the manager's "
+                "selection decision and outlines the key terms of your offer.\n\n"
+                "Your anticipated start date is {start_date}, and you will report directly to "
+                "{reporting_manager}. Your compensation package includes a base salary of "
+                "{base_salary}, with the following compensation structure: {compensation_structure}. "
+                "Equity or bonus eligibility for this role is {equity_or_bonus}.\n\n"
+                "Additional terms and conditions specific to your offer are as follows: {custom_terms}.\n\n"
+                "Please review this offer and confirm acceptance by replying from {candidate_email}. "
+                "We look forward to welcoming you to HireMe.\n\n"
+                "Sincerely,\n"
+                "HireMe Hiring Team\n"
+            )
+        ),
         resume_storage=LocalResumeStorage(tmp_path / "resumes"),
         parse_config=ParseRuntimeConfig(use_queue=use_queue),
         parse_queue_publisher=parse_queue_publisher or NoopParseQueuePublisher(),
         notification_config=notification_config or NotificationRuntimeConfig(enabled=False),
         email_sender=email_sender or NoopEmailSender(),
+        offer_letter_service=offer_letter_service,
+        docusign_service=docusign_service,
+        slack_service=slack_service,
+        slack_welcome_service=slack_welcome_service,
+        s3_store=s3_store or _FakeS3Store(),  # type: ignore[arg-type]
+        s3_bucket="test-bucket",
     )
     return job_service, app_service
 
@@ -702,5 +895,677 @@ def test_prefilter_can_show_candidates_outside_experience_range(tmp_path: Path) 
         assert result.total == 1
         assert len(result.items) == 1
         assert str(result.items[0].email) == "out-range@example.com"
+
+    asyncio.run(run())
+
+
+def test_manager_select_decision_requires_interview_done_and_creates_offer_letter(tmp_path: Path) -> None:
+    """Manager select should generate PDF + storage path and set created status."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Decision Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Decision User",
+                email="decision@example.com",
+                linkedin_url="https://www.linkedin.com/in/decision-user",
+                portfolio_url="https://decision.dev",
+                github_url="https://github.com/decision-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        updated = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            note="Strong interview performance.",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Senior Backend Engineer",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=14),
+                base_salary="USD 150,000",
+                compensation_structure="Annual base + 10% performance bonus",
+                equity_or_bonus="0.2% stock options",
+                reporting_manager="Engineering Director",
+                custom_terms="90-day probation with mentorship plan",
+            ),
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "offer_letter_created"
+        assert updated.offer_letter_status == "created"
+        assert isinstance(updated.offer_letter_storage_path, str)
+        assert updated.offer_letter_storage_path.startswith("s3://test-bucket/")
+        assert updated.offer_letter_generated_at is not None
+        assert updated.manager_decision == "select"
+        assert updated.manager_decision_at is not None
+        assert updated.manager_decision_note == "Strong interview performance."
+        assert updated.manager_selection_details is not None
+        assert updated.manager_selection_details.confirmed_job_title == "Senior Backend Engineer"
+        assert isinstance(updated.manager_selection_template_output, str)
+        assert "Dear Decision User," in updated.manager_selection_template_output
+        assert "position of Senior Backend Engineer at HireMe" in updated.manager_selection_template_output
+        assert "base salary of USD 150,000" in updated.manager_selection_template_output
+        assert updated.rejection_reason is None
+
+    asyncio.run(run())
+
+
+def test_manager_decision_reject_sets_rejected_status(tmp_path: Path) -> None:
+    """Manager reject decision should move candidate to rejected with reason."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Reject Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Reject User",
+                email="reject@example.com",
+                linkedin_url="https://www.linkedin.com/in/reject-user",
+                portfolio_url="https://reject.dev",
+                github_url="https://github.com/reject-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        updated = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="reject",
+            note="Communication was below expected bar.",
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "rejected"
+        assert updated.manager_decision == "reject"
+        assert updated.manager_selection_details is None
+        assert updated.rejection_reason == "Communication was below expected bar."
+
+    asyncio.run(run())
+
+
+def test_manager_reject_sends_candidate_email_when_notifications_enabled(tmp_path: Path) -> None:
+    """Manager reject should send final rejection email notice to candidate."""
+
+    async def run() -> None:
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Reject Mail Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Reject Mail User",
+                email="reject-mail@example.com",
+                linkedin_url="https://www.linkedin.com/in/reject-mail-user",
+                portfolio_url="https://reject-mail.dev",
+                github_url="https://github.com/reject-mail-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+
+        updated = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="reject",
+            note="Not the right fit for this role.",
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "rejected"
+        assert len(email_sender.manager_rejection_payloads) == 1
+        assert email_sender.manager_rejection_payloads[0].candidate_email == "reject-mail@example.com"
+
+    asyncio.run(run())
+
+
+def test_manager_decision_fails_before_interview_done(tmp_path: Path) -> None:
+    """Manager decision must be blocked when interview is not marked done."""
+
+    async def run() -> None:
+        job_service, app_service = _build_service(tmp_path)
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Guardrail Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Guardrail User",
+                email="guardrail@example.com",
+                linkedin_url="https://www.linkedin.com/in/guardrail-user",
+                portfolio_url="https://guardrail.dev",
+                github_url="https://github.com/guardrail-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        error = None
+        try:
+            await app_service.record_manager_decision(
+                application_id=created.id,
+                decision="reject",
+                note="Should fail because interview is pending.",
+            )
+        except ApplicationValidationError as exc:
+            error = exc
+
+        assert error is not None
+        assert "interview_schedule_status is interview_done" in str(error)
+
+    asyncio.run(run())
+
+
+def test_manager_select_uses_ai_offer_letter_service_when_available(tmp_path: Path) -> None:
+    """Manager select should store AI-generated letter when generator is configured."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"AI Letter Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="AI Letter User",
+                email="ai-letter@example.com",
+                linkedin_url="https://www.linkedin.com/in/ai-letter-user",
+                portfolio_url="https://ai-letter.dev",
+                github_url="https://github.com/ai-letter-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+
+        updated = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Backend Engineer III",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=21),
+                base_salary="USD 160,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus="0.3% equity",
+                reporting_manager="Head of Engineering",
+                custom_terms="Standard offer conditions apply",
+            ),
+        )
+
+        assert updated is not None
+        assert len(fake_offer_service.calls) == 1
+        assert updated.manager_selection_template_output is not None
+        assert "AI-generated offer letter for review" in updated.manager_selection_template_output
+        assert "Backend Engineer III" in updated.manager_selection_template_output
+
+    asyncio.run(run())
+
+
+def test_manager_offer_letter_approval_sends_pdf_and_updates_status(tmp_path: Path) -> None:
+    """Approving generated offer letter should email PDF and mark as sent."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Approve Letter Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Approve User",
+                email="approve@example.com",
+                linkedin_url="https://www.linkedin.com/in/approve-user",
+                portfolio_url="https://approve.dev",
+                github_url="https://github.com/approve-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        created_offer = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Backend Engineer IV",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=10),
+                base_salary="USD 170,000",
+                compensation_structure="Base + annual bonus",
+                equity_or_bonus="0.5% equity",
+                reporting_manager="Director of Engineering",
+                custom_terms="Subject to standard onboarding checks",
+            ),
+        )
+
+        assert created_offer is not None
+        assert created_offer.offer_letter_status == "created"
+
+        sent = await app_service.approve_offer_letter(application_id=created.id)
+        assert sent is not None
+        assert sent.offer_letter_status == "sent"
+        assert sent.applicant_status == "offer_letter_sent"
+        assert sent.offer_letter_sent_at is not None
+        assert len(email_sender.offer_payloads) == 1
+        assert email_sender.offer_payloads[0].candidate_email == "approve@example.com"
+        assert email_sender.offer_payloads[0].offer_letter_pdf_bytes.startswith(b"%PDF-1.4")
+
+    asyncio.run(run())
+
+
+def test_offer_letter_approval_uses_docusign_when_enabled(tmp_path: Path) -> None:
+    """Approving offer letter should use DocuSign when integration is configured."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService()
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"DocuSign Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="DocuSign User",
+                email="docusign@example.com",
+                linkedin_url="https://www.linkedin.com/in/docusign-user",
+                portfolio_url="https://docusign.dev",
+                github_url="https://github.com/docusign-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        created_offer = await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="DocuSign Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=15),
+                base_salary="USD 155,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus=None,
+                reporting_manager="Engineering Manager",
+                custom_terms=None,
+            ),
+        )
+        assert created_offer is not None
+        assert created_offer.offer_letter_status == "created"
+
+        sent = await app_service.approve_offer_letter(application_id=created.id)
+        assert sent is not None
+        assert sent.offer_letter_status == "sent_for_signature"
+        assert sent.applicant_status == "offer_letter_sent"
+        assert sent.docusign_envelope_id == "env-123"
+        assert len(fake_docusign.send_calls) == 1
+        assert len(email_sender.offer_payloads) == 0
+
+    asyncio.run(run())
+
+
+def test_docusign_webhook_completed_marks_candidate_signed_and_alerts_manager(
+    tmp_path: Path,
+) -> None:
+    """DocuSign completed callback should mark signed and send manager alert."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Signed Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Signed User",
+                email="signed@example.com",
+                linkedin_url="https://www.linkedin.com/in/signed-user",
+                portfolio_url="https://signed.dev",
+                github_url="https://github.com/signed-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Signed Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=20),
+                base_salary="USD 150,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus="0.2% equity",
+                reporting_manager="Senior Manager",
+                custom_terms=None,
+            ),
+        )
+        sent = await app_service.approve_offer_letter(application_id=created.id)
+        assert sent is not None
+        assert sent.offer_letter_status == "sent_for_signature"
+
+        processed = await app_service.handle_docusign_webhook(
+            application_id=created.id,
+            webhook_token="hook-secret",
+            raw_body=b'{"event":"envelope-completed"}',
+            content_type="application/json",
+        )
+        assert processed is True
+
+        updated = await app_service.get_by_id(created.id)
+        assert updated is not None
+        assert updated.offer_letter_status == "signed"
+        assert updated.offer_letter_signed_at is not None
+        assert updated.applicant_status == "offer_letter_sign"
+        assert len(email_sender.offer_signed_alert_payloads) == 1
+        assert email_sender.offer_signed_alert_payloads[0].manager_email == opening.manager_email
+
+    asyncio.run(run())
+
+
+def test_docusign_signed_event_triggers_slack_invite(tmp_path: Path) -> None:
+    """DocuSign completed callback should trigger Slack invite kickoff."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
+        fake_slack = _FakeSlackService()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            slack_service=fake_slack,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Slack Invite Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Slack Invite User",
+                email="slack-invite@example.com",
+                linkedin_url="https://www.linkedin.com/in/slack-invite-user",
+                portfolio_url="https://slack-invite.dev",
+                github_url="https://github.com/slack-invite-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Slack Invite Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=14),
+                base_salary="USD 148,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus=None,
+                reporting_manager="Engineering Manager",
+                custom_terms=None,
+            ),
+        )
+        await app_service.approve_offer_letter(application_id=created.id)
+
+        processed = await app_service.handle_docusign_webhook(
+            application_id=created.id,
+            webhook_token="hook-secret",
+            raw_body=b'{"event":"envelope-completed"}',
+            content_type="application/json",
+        )
+        assert processed is True
+        assert len(fake_slack.invite_calls) == 1
+
+        updated = await app_service.get_by_id(created.id)
+        assert updated is not None
+        assert updated.applicant_status == "offer_letter_sign"
+        assert updated.slack_invite_status == "invited"
+        assert updated.slack_invited_at is not None
+
+    asyncio.run(run())
+
+
+def test_docusign_signed_event_uses_fallback_invite_link_email_when_slack_invite_fails(
+    tmp_path: Path,
+) -> None:
+    """If Slack API invite fails, fallback invite link email should be sent."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
+        fake_slack = _FakeSlackService(fail_invite=True)
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            slack_service=fake_slack,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+            slack_invite_fallback_join_url="https://join.slack.com/t/hireme/shared_invite/test",
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Slack Fallback Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Slack Fallback User",
+                email="slack-fallback@example.com",
+                linkedin_url="https://www.linkedin.com/in/slack-fallback-user",
+                portfolio_url="https://slack-fallback.dev",
+                github_url="https://github.com/slack-fallback-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Slack Fallback Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=14),
+                base_salary="USD 148,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus=None,
+                reporting_manager="Engineering Manager",
+                custom_terms=None,
+            ),
+        )
+        await app_service.approve_offer_letter(application_id=created.id)
+
+        processed = await app_service.handle_docusign_webhook(
+            application_id=created.id,
+            webhook_token="hook-secret",
+            raw_body=b'{"event":"envelope-completed"}',
+            content_type="application/json",
+        )
+        assert processed is True
+        assert len(email_sender.slack_invite_payloads) == 1
+        assert (
+            email_sender.slack_invite_payloads[0].slack_invite_link
+            == "https://join.slack.com/t/hireme/shared_invite/test"
+        )
+
+        updated = await app_service.get_by_id(created.id)
+        assert updated is not None
+        assert updated.slack_invite_status == "invite_link_sent"
+        assert updated.applicant_status == "offer_letter_sign"
+
+    asyncio.run(run())
+
+
+def test_slack_team_join_sends_ai_welcome_and_hr_notification(tmp_path: Path) -> None:
+    """Slack team_join callback should DM candidate and notify HR."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
+        fake_slack = _FakeSlackService()
+        fake_welcome = _FakeSlackWelcomeService()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            slack_service=fake_slack,
+            slack_welcome_service=fake_welcome,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Slack Join Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Slack Join User",
+                email="slack-join@example.com",
+                linkedin_url="https://www.linkedin.com/in/slack-join-user",
+                portfolio_url="https://slack-join.dev",
+                github_url="https://github.com/slack-join-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Slack Join Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=12),
+                base_salary="USD 149,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus="0.2% equity",
+                reporting_manager="Hiring Manager",
+                custom_terms=None,
+            ),
+        )
+        await app_service.approve_offer_letter(application_id=created.id)
+        await app_service.handle_docusign_webhook(
+            application_id=created.id,
+            webhook_token="hook-secret",
+            raw_body=b'{"event":"envelope-completed"}',
+            content_type="application/json",
+        )
+
+        team_join_payload = {
+            "type": "event_callback",
+            "event": {
+                "type": "team_join",
+                "user": {
+                    "id": "U123JOIN",
+                    "profile": {"email": "slack-join@example.com"},
+                },
+            },
+        }
+        response = await app_service.handle_slack_webhook(
+            raw_body=json.dumps(team_join_payload).encode("utf-8"),
+            headers={},
+        )
+        assert response == {"processed": True}
+        assert len(fake_welcome.calls) == 1
+        assert len(fake_slack.dm_calls) == 1
+        assert len(fake_slack.hr_calls) == 1
+        assert fake_slack.dm_calls[0][0] == "U123JOIN"
+
+        updated = await app_service.get_by_id(created.id)
+        assert updated is not None
+        assert updated.slack_user_id == "U123JOIN"
+        assert updated.slack_joined_at is not None
+        assert updated.slack_welcome_sent_at is not None
+        assert updated.slack_onboarding_status == "onboarded"
+        assert updated.applicant_status == "offer_letter_sign"
+
+    asyncio.run(run())
+
+
+def test_slack_url_verification_returns_challenge_without_slack_service(
+    tmp_path: Path,
+) -> None:
+    """Slack URL verification should succeed even before full Slack config."""
+
+    async def run() -> None:
+        _, app_service = _build_service(tmp_path)
+        response = await app_service.handle_slack_webhook(
+            raw_body=json.dumps(
+                {
+                    "type": "url_verification",
+                    "challenge": "abc123",
+                }
+            ).encode("utf-8"),
+            headers={},
+        )
+        assert response == {"challenge": "abc123"}
 
     asyncio.run(run())

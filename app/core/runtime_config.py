@@ -1,5 +1,6 @@
 """YAML-backed runtime configuration models and loader."""
 
+import copy
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,8 @@ class ApplicationRuntimeConfig(BaseModel):
     max_docx_size_mb: int = 10
     resume_chunk_size_bytes: int = 1_048_576
     resume_download_url_expire_seconds: int = 900
+    offer_letter_s3_prefix: str = "offer-letters"
+    offer_letter_download_url_expire_seconds: int = 900
     default_list_limit: int = 20
     max_list_limit: int = 100
     applications_not_open_message: str = "applications have not opened yet"
@@ -90,6 +93,8 @@ class ApplicationRuntimeConfig(BaseModel):
             "year",
         ]
     )
+    manager_selection_template: str = ""
+    slack_invite_fallback_join_url: str = ""
 
 
 class StorageRuntimeConfig(BaseModel):
@@ -189,6 +194,7 @@ class ParseRuntimeConfig(BaseModel):
     provider: Literal["sqs", "redis", "local"] = "sqs"
     region: str = "us-east-1"
     queue_name: str = "hireme-resume-parse"
+    queue_url: str | None = None
     worker_concurrency: int = 20
     max_in_flight_per_worker: int = 20
     receive_batch_size: int = 10
@@ -255,6 +261,7 @@ class EvaluationRuntimeConfig(BaseModel):
     provider: Literal["sqs", "redis", "local"] = "sqs"
     region: str = "us-east-1"
     queue_name: str = "hireme-llm-evaluation"
+    queue_url: str | None = None
     enqueue_timeout_seconds: float = 2.0
     worker_concurrency: int = 10
     max_in_flight_per_worker: int = 10
@@ -275,6 +282,13 @@ class EvaluationRuntimeConfig(BaseModel):
     summary_prompt_template: str = ""
     max_reason_chars: int = 500
     max_work_summary_chars: int = 1500
+    offer_letter_generation_enabled: bool = True
+    offer_letter_profile_json_max_chars: int = 4000
+    offer_letter_max_chars: int = 8000
+    offer_letter_prompt_template: str = ""
+    slack_welcome_generation_enabled: bool = True
+    slack_welcome_max_chars: int = 2000
+    slack_welcome_prompt_template: str = ""
 
 
 class ResearchRuntimeConfig(BaseModel):
@@ -385,6 +399,7 @@ class ResearchRuntimeConfig(BaseModel):
         provider: Literal["sqs", "redis", "local"] = "sqs"
         region: str = "us-east-1"
         queue_name: str = "hireme-candidate-research-enrichment"
+        queue_url: str | None = None
         enqueue_timeout_seconds: float = 2.0
         worker_concurrency: int = 8
         max_in_flight_per_worker: int = 8
@@ -471,11 +486,33 @@ class ResearchRuntimeConfig(BaseModel):
 class SchedulingRuntimeConfig(BaseModel):
     """Runtime config for interview slot orchestration and queue processing."""
 
+    class FirefliesRuntimeConfig(BaseModel):
+        """Runtime config for post-interview transcript/summary sync from Fireflies."""
+
+        enabled: bool = False
+        mock_mode: bool = False
+        api_url: str = "https://api.fireflies.ai/graphql"
+        owner_email: str | None = None
+        request_timeout_seconds: float = 15.0
+        poll_interval_seconds: int = 180
+        batch_size: int = 50
+        join_before_minutes: int = 10
+        join_retry_cooldown_minutes: int = 5
+        transcript_poll_delay_minutes: int = 20
+        transcript_poll_interval_minutes: int = 15
+        max_poll_attempts: int = 24
+        transcript_lookup_hours: int = 72
+        transcripts_page_limit: int = 20
+        max_transcript_pages: int = 3
+        update_schedule_status_on_complete: bool = True
+        completed_schedule_status: str = "interview_done"
+
     enabled: bool = True
     use_queue: bool = True
     provider: Literal["sqs", "redis", "local"] = "sqs"
     region: str = "us-east-1"
     queue_name: str = "hireme-interview-scheduling"
+    queue_url: str | None = None
     enqueue_timeout_seconds: float = 2.0
     worker_concurrency: int = 4
     max_in_flight_per_worker: int = 4
@@ -554,6 +591,7 @@ class SchedulingRuntimeConfig(BaseModel):
         "Hold expires at: {hold_expires_at}\n"
         "Do not schedule conflicting meetings in this slot."
     )
+    fireflies: FirefliesRuntimeConfig = Field(default_factory=FirefliesRuntimeConfig)
 
 
 class NotificationRuntimeConfig(BaseModel):
@@ -591,6 +629,8 @@ class NotificationRuntimeConfig(BaseModel):
         "You have been shortlisted for the {role_title} role.\n"
         "Please click one preferred option from the list below:\n\n"
         "{slot_options}\n\n"
+        "If these options do not work for you, use one of these links:\n"
+        "{action_links}\n\n"
         "These slots are held temporarily on the interviewer's calendar and will expire at "
         "{hold_expires_at}.\n\n"
         "Regards,\nHireMe Team"
@@ -603,6 +643,8 @@ class NotificationRuntimeConfig(BaseModel):
         "This is a reminder to confirm your technical interview slot for the {role_title} role.\n"
         "Please click one preferred option below:\n\n"
         "{slot_options}\n\n"
+        "If these options do not work for you, use one of these links:\n"
+        "{action_links}\n\n"
         "If you are interested, please confirm within the next 24 hours. "
         "Unconfirmed slots will expire at {hold_expires_at}.\n\n"
         "Regards,\nHireMe Team"
@@ -616,6 +658,15 @@ class NotificationRuntimeConfig(BaseModel):
         "A calendar invitation has been sent.\n\n"
         "Regards,\nHireMe Team"
     )
+    interview_thank_you_subject_template: str = (
+        "Thank you for interviewing with HireMe ({role_title})"
+    )
+    interview_thank_you_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "Thank you for participating in the interview.\n"
+        "We will let you know the outcome soon. Stay tuned.\n\n"
+        "Regards,\nHireMe Team"
+    )
     interview_reschedule_options_subject_template: str = (
         "Action required: approve alternative interview slots - HireMe ({role_title})"
     )
@@ -626,6 +677,49 @@ class NotificationRuntimeConfig(BaseModel):
         "{slot_options}\n\n"
         "If none work, click REJECT to request the next set of options:\n"
         "{reject_link}\n\n"
+        "Regards,\nHireMe Team"
+    )
+    offer_letter_subject_template: str = "Congratulations - Offer Letter for {role_title}"
+    offer_letter_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "Congratulations! We are excited to see you on the team.\n"
+        "Please find your offer letter attached as a PDF.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    manager_rejection_subject_template: str = "Application update - HireMe ({role_title})"
+    manager_rejection_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "Thank you for your time and for interviewing with us. "
+        "Sorry, we will not be able to move forward with your application.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    offer_signed_alert_subject_template: str = (
+        "Signed: Offer Letter completed by {candidate_name} ({role_title})"
+    )
+    offer_signed_alert_body_template: str = (
+        "Hi {manager_name},\n\n"
+        "{candidate_name} ({candidate_email}) has signed the offer letter for {role_title}.\n"
+        "Please review the candidate record in the admin dashboard.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    slack_invite_subject_template: str = "Join HireMe Slack - {role_title}"
+    slack_invite_body_template: str = (
+        "Hi {candidate_name},\n\n"
+        "Congratulations again on signing your offer for the {role_title} role.\n"
+        "Please join our Slack workspace using this invite link:\n"
+        "{slack_invite_link}\n\n"
+        "We are excited to see you in the team.\n\n"
+        "Regards,\nHireMe Team"
+    )
+    slack_joined_alert_subject_template: str = (
+        "Joined Slack: {candidate_name} is now onboarded ({role_title})"
+    )
+    slack_joined_alert_body_template: str = (
+        "Hi {manager_name},\n\n"
+        "{candidate_name} ({candidate_email}) has successfully joined the HireMe Slack workspace.\n"
+        "Role: {role_title}\n"
+        "Start date: {start_date}\n"
+        "Joined at: {slack_joined_at}\n\n"
         "Regards,\nHireMe Team"
     )
     send_timeout_seconds: float = 5.0
@@ -708,6 +802,41 @@ class CorsRuntimeConfig(BaseModel):
     max_age_seconds: int = 600
 
 
+class DocusignRuntimeConfig(BaseModel):
+    """Runtime configuration for DocuSign e-signature workflow."""
+
+    enabled: bool = False
+    base_uri: str = "https://demo.docusign.net"
+    oauth_base_uri: str = "https://account-d.docusign.com"
+    account_id: str = ""
+    webhook_url: str = "http://localhost:8000/api/v1/integrations/docusign/webhook"
+    webhook_secret_query_param: str = "token"
+    send_timeout_seconds: float = 20.0
+    oauth_timeout_seconds: float = 15.0
+    oauth_token_skew_seconds: int = 60
+    envelope_subject_template: str = "Offer Letter - {role_title}"
+    sign_here_x_position: str = "430"
+    sign_here_y_position: str = "720"
+    sign_here_page_number: str = "1"
+
+
+class SlackRuntimeConfig(BaseModel):
+    """Runtime configuration for Slack onboarding workflow."""
+
+    enabled: bool = False
+    api_base_url: str = "https://slack.com/api"
+    send_timeout_seconds: float = 12.0
+    signature_ttl_seconds: int = 300
+    verify_event_signature: bool = True
+    hr_channel_id: str = ""
+    invite_team_id: str = ""
+    invite_channel_ids: list[str] = Field(default_factory=list)
+    onboarding_resource_links: list[str] = Field(default_factory=list)
+    invite_custom_message_template: str = (
+        "Hi {candidate_name}, welcome to the team. Please join the workspace to start onboarding."
+    )
+
+
 class RuntimeConfig(BaseModel):
     """Top-level runtime configuration model."""
 
@@ -726,12 +855,42 @@ class RuntimeConfig(BaseModel):
     scheduling: SchedulingRuntimeConfig = Field(default_factory=SchedulingRuntimeConfig)
     notification: NotificationRuntimeConfig = Field(default_factory=NotificationRuntimeConfig)
     google_api: GoogleApiRuntimeConfig = Field(default_factory=GoogleApiRuntimeConfig)
+    docusign: DocusignRuntimeConfig = Field(default_factory=DocusignRuntimeConfig)
+    slack: SlackRuntimeConfig = Field(default_factory=SlackRuntimeConfig)
     cors: CorsRuntimeConfig = Field(default_factory=CorsRuntimeConfig)
     security_headers: SecurityHeadersRuntimeConfig = Field(
         default_factory=SecurityHeadersRuntimeConfig
     )
     timeout: TimeoutRuntimeConfig = Field(default_factory=TimeoutRuntimeConfig)
     rate_limit: RateLimitRuntimeConfig = Field(default_factory=RateLimitRuntimeConfig)
+
+
+@lru_cache(maxsize=1)
+def _get_yaml_module():
+    """Import and cache the YAML module used by config loaders."""
+
+    try:
+        import yaml  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "PyYAML is not installed in the active Python environment. "
+            "Install dependencies with `pip install -r requirements.txt` or run with "
+            "`venv/bin/uvicorn app.main:app --reload`."
+        ) from exc
+    return yaml
+
+
+@lru_cache(maxsize=32)
+def _load_yaml_file(path_str: str) -> dict[str, Any]:
+    """Load one YAML file and cache the parsed mapping by absolute path."""
+
+    yaml = _get_yaml_module()
+    path = Path(path_str)
+    with path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"YAML config must be a mapping: {path}")
+    return payload
 
 
 @lru_cache(maxsize=1)
@@ -750,34 +909,22 @@ def get_runtime_config() -> RuntimeConfig:
     evaluation_config_path = settings.evaluation_config_path
     research_config_path = settings.research_config_path
     scheduling_config_path = settings.scheduling_config_path
+    prompt_config_path = settings.prompt_config_path
+    template_config_path = settings.template_config_path
 
-    try:
-        import yaml
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "PyYAML is not installed in the active Python environment. "
-            "Install dependencies with `pip install -r requirements.txt` or run with "
-            "`venv/bin/uvicorn app.main:app --reload`."
-        ) from exc
-
-    def _load_yaml(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as handle:
-            payload = yaml.safe_load(handle) or {}
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"YAML config must be a mapping: {path}")
-        return payload
-
-    raw_api_platform_config = _load_yaml(api_platform_config_path)
-    raw_application_config = _load_yaml(application_config_path)
-    raw_database_config = _load_yaml(database_config_path)
-    raw_parse_config = _load_yaml(parse_config_path)
-    raw_notification_config = _load_yaml(notification_config_path)
-    raw_google_api_config = _load_yaml(google_api_config_path)
-    raw_s3_config = _load_yaml(s3_config_path)
-    raw_bedrock_config = _load_yaml(bedrock_config_path)
-    raw_evaluation_config = _load_yaml(evaluation_config_path)
-    raw_research_config = _load_yaml(research_config_path)
-    raw_scheduling_config = _load_yaml(scheduling_config_path)
+    raw_api_platform_config = copy.deepcopy(_load_yaml_file(str(api_platform_config_path.resolve())))
+    raw_application_config = copy.deepcopy(_load_yaml_file(str(application_config_path.resolve())))
+    raw_database_config = copy.deepcopy(_load_yaml_file(str(database_config_path.resolve())))
+    raw_parse_config = copy.deepcopy(_load_yaml_file(str(parse_config_path.resolve())))
+    raw_notification_config = copy.deepcopy(_load_yaml_file(str(notification_config_path.resolve())))
+    raw_google_api_config = copy.deepcopy(_load_yaml_file(str(google_api_config_path.resolve())))
+    raw_s3_config = copy.deepcopy(_load_yaml_file(str(s3_config_path.resolve())))
+    raw_bedrock_config = copy.deepcopy(_load_yaml_file(str(bedrock_config_path.resolve())))
+    raw_evaluation_config = copy.deepcopy(_load_yaml_file(str(evaluation_config_path.resolve())))
+    raw_research_config = copy.deepcopy(_load_yaml_file(str(research_config_path.resolve())))
+    raw_scheduling_config = copy.deepcopy(_load_yaml_file(str(scheduling_config_path.resolve())))
+    raw_prompt_config = copy.deepcopy(_load_yaml_file(str(prompt_config_path.resolve())))
+    raw_template_config = copy.deepcopy(_load_yaml_file(str(template_config_path.resolve())))
 
     def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
         merged = dict(base)
@@ -789,62 +936,38 @@ def get_runtime_config() -> RuntimeConfig:
                 merged[key] = value
         return merged
 
+    def _extract_section(raw: dict[str, Any], section: str) -> dict[str, Any]:
+        value = raw.get(section)
+        if isinstance(value, dict):
+            return value
+        return raw
+
+    def _unwrap_overlay(raw: dict[str, Any], wrapper: str) -> dict[str, Any]:
+        value = raw.get(wrapper)
+        if isinstance(value, dict):
+            return value
+        return raw
+
     combined_config = _merge_dicts(raw_api_platform_config, raw_application_config)
     combined_config = _merge_dicts(combined_config, raw_database_config)
-    if "parse" in raw_parse_config and isinstance(raw_parse_config["parse"], dict):
-        combined_config = _merge_dicts(combined_config, {"parse": raw_parse_config["parse"]})
-    else:
-        combined_config = _merge_dicts(combined_config, {"parse": raw_parse_config})
-    if "notification" in raw_notification_config and isinstance(
-        raw_notification_config["notification"], dict
-    ):
+
+    section_files = [
+        ("parse", raw_parse_config),
+        ("notification", raw_notification_config),
+        ("s3", raw_s3_config),
+        ("google_api", raw_google_api_config),
+        ("bedrock", raw_bedrock_config),
+        ("evaluation", raw_evaluation_config),
+        ("research", raw_research_config),
+        ("scheduling", raw_scheduling_config),
+    ]
+    for section, raw_config in section_files:
         combined_config = _merge_dicts(
             combined_config,
-            {"notification": raw_notification_config["notification"]},
+            {section: _extract_section(raw_config, section)},
         )
-    else:
-        combined_config = _merge_dicts(combined_config, {"notification": raw_notification_config})
-    if "s3" in raw_s3_config and isinstance(raw_s3_config["s3"], dict):
-        combined_config = _merge_dicts(combined_config, {"s3": raw_s3_config["s3"]})
-    else:
-        combined_config = _merge_dicts(combined_config, {"s3": raw_s3_config})
-    if "google_api" in raw_google_api_config and isinstance(
-        raw_google_api_config["google_api"], dict
-    ):
-        combined_config = _merge_dicts(
-            combined_config,
-            {"google_api": raw_google_api_config["google_api"]},
-        )
-    else:
-        combined_config = _merge_dicts(combined_config, {"google_api": raw_google_api_config})
-    if "bedrock" in raw_bedrock_config and isinstance(raw_bedrock_config["bedrock"], dict):
-        combined_config = _merge_dicts(combined_config, {"bedrock": raw_bedrock_config["bedrock"]})
-    else:
-        combined_config = _merge_dicts(combined_config, {"bedrock": raw_bedrock_config})
-    if "evaluation" in raw_evaluation_config and isinstance(
-        raw_evaluation_config["evaluation"], dict
-    ):
-        combined_config = _merge_dicts(
-            combined_config,
-            {"evaluation": raw_evaluation_config["evaluation"]},
-        )
-    else:
-        combined_config = _merge_dicts(combined_config, {"evaluation": raw_evaluation_config})
-    if "research" in raw_research_config and isinstance(raw_research_config["research"], dict):
-        combined_config = _merge_dicts(
-            combined_config,
-            {"research": raw_research_config["research"]},
-        )
-    else:
-        combined_config = _merge_dicts(combined_config, {"research": raw_research_config})
-    if "scheduling" in raw_scheduling_config and isinstance(
-        raw_scheduling_config["scheduling"], dict
-    ):
-        combined_config = _merge_dicts(
-            combined_config,
-            {"scheduling": raw_scheduling_config["scheduling"]},
-        )
-    else:
-        combined_config = _merge_dicts(combined_config, {"scheduling": raw_scheduling_config})
+
+    combined_config = _merge_dicts(combined_config, _unwrap_overlay(raw_prompt_config, "prompts"))
+    combined_config = _merge_dicts(combined_config, _unwrap_overlay(raw_template_config, "templates"))
 
     return RuntimeConfig.model_validate(combined_config)

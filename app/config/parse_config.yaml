@@ -3,6 +3,7 @@ parse:
   provider: sqs
   region: us-east-1
   queue_name: hireme-resume-parse
+  queue_url: "https://sqs.us-east-1.amazonaws.com/173763384281/hireme-resume-parse"
   worker_concurrency: 20
   max_in_flight_per_worker: 20
   receive_batch_size: 10

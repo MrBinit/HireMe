@@ -25,6 +25,7 @@ from app.schemas.application import (
     ApplicantStatus,
     ApplicationListResponse,
     ApplicationRecord,
+    ManagerDecisionPayload,
     ResumeDownloadResponse,
 )
 from app.schemas.auth import AdminAccessTokenResponse, AdminLoginPayload
@@ -203,6 +204,57 @@ async def get_candidate_resume_download_url(
     )
 
 
+@router.get(
+    "/admin/candidates/{application_id}/offer-letter-download",
+    response_model=ResumeDownloadResponse,
+)
+async def get_candidate_offer_letter_download_url(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+    s3_store: S3ObjectStore = Depends(get_s3_store),
+) -> ResumeDownloadResponse:
+    """Return temporary pre-signed download URL for generated offer-letter PDF."""
+
+    candidate = await service.get_by_id(application_id)
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    storage_path = candidate.offer_letter_storage_path
+    if not storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="offer letter has not been generated yet",
+        )
+
+    parsed = urlparse(storage_path)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="offer letter is not stored in S3",
+        )
+
+    bucket = parsed.netloc
+    key = parsed.path.lstrip("/")
+    runtime_config = get_runtime_config()
+    expires_in = runtime_config.application.offer_letter_download_url_expire_seconds
+    filename = f"offer-letter-{application_id}.pdf"
+    content_disposition = f'attachment; filename="{filename}"'
+    download_url = await s3_store.generate_presigned_get_url(
+        key=key,
+        expires_in_seconds=expires_in,
+        bucket=bucket,
+        response_content_disposition=content_disposition,
+    )
+    return ResumeDownloadResponse(
+        download_url=download_url,
+        expires_in_seconds=expires_in,
+        filename=filename,
+    )
+
+
 @router.patch(
     "/admin/candidates/{application_id}/review",
     response_model=ApplicationRecord,
@@ -225,6 +277,92 @@ async def update_candidate_review(
         application_id=application_id,
         updates=updates,
     )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return updated
+
+
+@router.patch(
+    "/admin/candidates/{application_id}/manager-decision",
+    response_model=ApplicationRecord,
+)
+async def update_manager_decision(
+    application_id: UUID,
+    payload: ManagerDecisionPayload,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> ApplicationRecord:
+    """Record manager select/reject decision once interview lifecycle is complete."""
+
+    updated = await service.record_manager_decision(
+        application_id=application_id,
+        decision=payload.decision,
+        note=payload.note,
+        selection_details=payload.selection_details,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return updated
+
+
+@router.post(
+    "/admin/candidates/{application_id}/offer-letter/approve",
+    response_model=ApplicationRecord,
+)
+async def approve_offer_letter_and_send(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> ApplicationRecord:
+    """Approve generated offer letter and send it to candidate via email."""
+
+    updated = await service.approve_offer_letter(application_id=application_id)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return updated
+
+
+@router.post(
+    "/admin/candidates/{application_id}/offer-letter/sync-signature",
+    response_model=ApplicationRecord,
+)
+async def sync_offer_letter_signature_status(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> ApplicationRecord:
+    """Sync candidate offer-letter signature status from DocuSign directly."""
+
+    updated = await service.sync_offer_letter_signature_status(application_id=application_id)
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return updated
+
+
+@router.post(
+    "/admin/candidates/{application_id}/slack/retry-invite",
+    response_model=ApplicationRecord,
+)
+async def retry_candidate_slack_invite(
+    application_id: UUID,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> ApplicationRecord:
+    """Retry Slack invite/onboarding kickoff after offer signature."""
+
+    updated = await service.retry_slack_invite(application_id=application_id)
     if updated is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

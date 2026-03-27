@@ -1,0 +1,82 @@
+x-aws-runtime: &aws-runtime
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    - ${HOME}/.aws:/root/.aws:ro
+    - ./secrets:/app/secrets:ro
+    - ./docusign-private.key:/app/docusign-private.key:ro
+  environment:
+    USE_AWS_SECRETS_MANAGER: "true"
+    SECRETS_MANAGER_PREFER_ENV: "false"
+    AWS_REGION: ${AWS_REGION:-}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-}
+    AWS_SECRETS_MANAGER_SECRET_ID: ${AWS_SECRETS_MANAGER_SECRET_ID:-hireme/env}
+    AWS_PROFILE: ${AWS_PROFILE:-}
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    DATABASE_URL: ${DATABASE_URL:-}
+    SQS_ENDPOINT_URL: ${SQS_ENDPOINT_URL:-}
+    SMTP_USERNAME: ${SMTP_USERNAME:-}
+    SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    BEDROCK_ENDPOINT_URL: ${BEDROCK_ENDPOINT_URL:-}
+    ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-}
+    INTERVIEW_CONFIRMATION_TOKEN_SECRET: ${INTERVIEW_CONFIRMATION_TOKEN_SECRET:-}
+    ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+    ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-}
+    REFEREE_USERNAME: ${REFEREE_USERNAME:-}
+    REFEREE_PASSWORD: ${REFEREE_PASSWORD:-}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    GOOGLE_REFRESH_TOKEN: ${GOOGLE_REFRESH_TOKEN:-}
+    GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+    GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-/app/secrets/google-service-account.json}
+    SERPAPI_API_KEY: ${SERPAPI_API_KEY:-}
+    GITHUB_API_TOKEN: ${GITHUB_API_TOKEN:-}
+    TWITTER_CONSUMER_KEY: ${TWITTER_CONSUMER_KEY:-}
+    TWITTER_CONSUMER_SECRET: ${TWITTER_CONSUMER_SECRET:-}
+    TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+    FIREFLIES_API_KEY: ${FIREFLIES_API_KEY:-}
+    FIREFLIES_WEBHOOK_SECRET: ${FIREFLIES_WEBHOOK_SECRET:-}
+    DOCUSIGN_ACCESS_TOKEN: ${DOCUSIGN_ACCESS_TOKEN:-}
+    DOCUSIGN_INTEGRATION_KEY: ${DOCUSIGN_INTEGRATION_KEY:-}
+    DOCUSIGN_USER_ID: ${DOCUSIGN_USER_ID:-}
+    DOCUSIGN_PRIVATE_KEY: ${DOCUSIGN_PRIVATE_KEY:-}
+    DOCUSIGN_PRIVATE_KEY_PATH: ${DOCUSIGN_PRIVATE_KEY_PATH:-/app/docusign-private.key}
+    DOCUSIGN_WEBHOOK_SECRET: ${DOCUSIGN_WEBHOOK_SECRET:-}
+    SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+    SLACK_ADMIN_USER_TOKEN: ${SLACK_ADMIN_USER_TOKEN:-}
+    SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+    SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+    SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+    SLACK_BOT_REFRESH_TOKEN: ${SLACK_BOT_REFRESH_TOKEN:-}
+    SLACK_ADMIN_REFRESH_TOKEN: ${SLACK_ADMIN_REFRESH_TOKEN:-}
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *aws-runtime
+    ports:
+      - "8000:8000"
+
+  sqs_worker:
+    <<: *aws-runtime
+    command: ["python", "-m", "app.scripts.sqs_worker"]
+
+  sqs_evaluation_worker:
+    <<: *aws-runtime
+    command: ["python", "-m", "app.scripts.sqs_evaluation_worker"]
+
+  sqs_research_enrichment_worker:
+    <<: *aws-runtime
+    command: ["python", "-m", "app.scripts.sqs_research_enrichment_worker"]
+
+  sqs_scheduling_worker:
+    <<: *aws-runtime
+    command: ["python", "-m", "app.scripts.sqs_scheduling_worker"]
+
+  interview_hold_expiry_worker:
+    <<: *aws-runtime
+    command: ["python", "-m", "app.scripts.interview_hold_expiry_worker"]

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { API_BASE, readApiError } from "../lib/api";
 
@@ -12,41 +12,75 @@ interface SubmitState {
 export default function CandidateApplyPage() {
   const [roles, setRoles] = useState<string[]>([]);
   const [isLoadingRoles, setIsLoadingRoles] = useState(true);
+  const [rolesLoadError, setRolesLoadError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>({
     type: "idle",
     message: "",
   });
 
-  useEffect(() => {
-    let isActive = true;
+  const loadRoles = useCallback(async () => {
+    const normalizeRoles = (raw: unknown): string[] => {
+      if (!Array.isArray(raw)) return [];
+      return Array.from(
+        new Set(
+          raw
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0),
+        ),
+      ).sort((a, b) => a.localeCompare(b));
+    };
 
-    const loadRoles = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/api/v1/roles`, {
-          cache: "no-store",
-        });
-        const payload = (await response.json().catch(() => [])) as string[];
-        if (isActive && Array.isArray(payload)) {
-          setRoles(payload);
-        }
-      } catch {
-        if (isActive) {
-          setRoles([]);
-        }
-      } finally {
-        if (isActive) {
-          setIsLoadingRoles(false);
-        }
+    setIsLoadingRoles(true);
+    try {
+      const rolesResponse = await fetch(`${API_BASE}/api/v1/roles`, { cache: "no-store" });
+      const rolePayload = await rolesResponse.json().catch(() => null);
+      const directRoles = normalizeRoles(rolePayload);
+
+      if (directRoles.length > 0) {
+        setRoles(directRoles);
+        setRolesLoadError("");
+        return;
       }
-    };
 
-    loadRoles();
+      const openingsResponse = await fetch(`${API_BASE}/api/v1/job-openings`, { cache: "no-store" });
+      const openingsPayload = (await openingsResponse.json().catch(() => null)) as
+        | { items?: Array<{ role_title?: string; status?: string }> }
+        | null;
 
-    return () => {
-      isActive = false;
-    };
+      const openingRoles = Array.from(
+        new Set(
+          (openingsPayload?.items || [])
+            .filter((item) => (item.status || "").toLowerCase() === "open")
+            .map((item) => (item.role_title || "").trim())
+            .filter((item) => item.length > 0),
+        ),
+      ).sort((a, b) => a.localeCompare(b));
+
+      setRoles(openingRoles);
+      setRolesLoadError(
+        openingRoles.length === 0 ? "No active job openings are available right now." : "",
+      );
+    } catch {
+      setRoles([]);
+      setRolesLoadError("Unable to load roles from backend.");
+    } finally {
+      setIsLoadingRoles(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadRoles();
+  }, [loadRoles]);
+
+  useEffect(() => {
+    if (roles.length > 0) return;
+    const timer = window.setInterval(() => {
+      void loadRoles();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [loadRoles, roles.length]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -149,6 +183,13 @@ export default function CandidateApplyPage() {
                   </option>
                 ))}
               </select>
+              {isLoadingRoles ? <small className="muted">Loading roles...</small> : null}
+              {!isLoadingRoles && rolesLoadError ? <small className="error">{rolesLoadError}</small> : null}
+              {!isLoadingRoles && roles.length === 0 ? (
+                <button type="button" onClick={() => void loadRoles()}>
+                  Retry roles
+                </button>
+              ) : null}
             </label>
 
             <label className="full">

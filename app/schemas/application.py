@@ -1,13 +1,14 @@
 """Schema models for candidate application payloads and responses."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 ParseStatus = Literal["pending", "in_progress", "completed", "failed"]
 EvaluationStatus = Literal["queued", "in_progress", "completed", "failed"]
+ManagerDecision = Literal["select", "reject"]
 ApplicantStatus = Literal[
     "applied",
     "screened",
@@ -20,6 +21,9 @@ ApplicantStatus = Literal[
     "interview",
     "accepted",
     "sent_to_manager",
+    "offer_letter_created",
+    "offer_letter_sent",
+    "offer_letter_sign",
 ]
 
 
@@ -54,6 +58,18 @@ class StatusHistoryEntry(BaseModel):
     source: str = "system"
 
 
+class ManagerSelectionDetails(BaseModel):
+    """Offer details required when manager selects a candidate."""
+
+    confirmed_job_title: str = Field(min_length=2, max_length=160)
+    start_date: date
+    base_salary: str = Field(min_length=1, max_length=200)
+    compensation_structure: str = Field(min_length=2, max_length=400)
+    equity_or_bonus: str | None = Field(default=None, max_length=400)
+    reporting_manager: str = Field(min_length=2, max_length=160)
+    custom_terms: str | None = Field(default=None, max_length=2000)
+
+
 class ApplicationRecord(BaseModel):
     """Stored representation of an application."""
 
@@ -83,6 +99,30 @@ class ApplicationRecord(BaseModel):
     interview_hold_expires_at: datetime | None = None
     interview_calendar_email: str | None = None
     interview_schedule_error: str | None = None
+    interview_transcript_status: str | None = None
+    interview_transcript_url: str | None = None
+    interview_transcript_summary: str | None = None
+    interview_transcript_synced_at: datetime | None = None
+    manager_decision: ManagerDecision | None = None
+    manager_decision_at: datetime | None = None
+    manager_decision_note: str | None = None
+    manager_selection_details: ManagerSelectionDetails | None = None
+    manager_selection_template_output: str | None = None
+    offer_letter_status: str | None = None
+    offer_letter_storage_path: str | None = None
+    offer_letter_generated_at: datetime | None = None
+    offer_letter_sent_at: datetime | None = None
+    offer_letter_signed_at: datetime | None = None
+    offer_letter_error: str | None = None
+    docusign_envelope_id: str | None = None
+    slack_invite_status: str | None = None
+    slack_invited_at: datetime | None = None
+    slack_user_id: str | None = None
+    slack_joined_at: datetime | None = None
+    slack_welcome_message: str | None = None
+    slack_welcome_sent_at: datetime | None = None
+    slack_onboarding_status: str | None = None
+    slack_error: str | None = None
     status_history: list[StatusHistoryEntry] = Field(default_factory=list)
     reference_status: bool = False
     resume: ResumeFileMeta
@@ -182,3 +222,21 @@ class AdminCandidateReviewPayload(BaseModel):
     candidate_brief: str | None = Field(default=None, max_length=1500)
     online_research_summary: str | None = Field(default=None, max_length=4000)
     rejection_reason: str | None = Field(default=None, max_length=1000)
+
+
+class ManagerDecisionPayload(BaseModel):
+    """Admin payload for manager select/reject decision after interview completion."""
+
+    decision: ManagerDecision
+    note: str | None = Field(default=None, max_length=1000)
+    selection_details: ManagerSelectionDetails | None = None
+
+    @model_validator(mode="after")
+    def validate_selection_details(self) -> "ManagerDecisionPayload":
+        """Require details only for select decisions."""
+
+        if self.decision == "select" and self.selection_details is None:
+            raise ValueError("selection_details are required when decision=select")
+        if self.decision == "reject" and self.selection_details is not None:
+            raise ValueError("selection_details are allowed only when decision=select")
+        return self

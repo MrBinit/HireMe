@@ -78,6 +78,25 @@ class S3ObjectStore:
                 raise S3ObjectAlreadyExistsError(key) from exc
             raise
 
+    async def put_bytes(
+        self,
+        *,
+        key: str,
+        payload: bytes,
+        content_type: str,
+    ) -> None:
+        """Store raw bytes payload at key with explicit content type."""
+
+        def _run() -> None:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=payload,
+                ContentType=content_type,
+            )
+
+        await anyio.to_thread.run_sync(_run)
+
     async def get_json(self, key: str) -> dict[str, Any]:
         """Fetch and decode JSON object from S3 key."""
 

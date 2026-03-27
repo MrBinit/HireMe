@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
@@ -11,7 +11,74 @@ type ConfirmState =
   | { kind: "success"; message: string; meetingLink?: string | null }
   | { kind: "error"; message: string };
 
-export default function InterviewConfirmPage() {
+type UiMessage = {
+  title: string;
+  body: string;
+  hint?: string;
+};
+
+function normalizeConfirmMessage(state: ConfirmState): UiMessage {
+  if (state.kind === "loading") {
+    return {
+      title: "Confirming your interview",
+      body: "We are locking your selected slot and finalizing your calendar booking.",
+    };
+  }
+  if (state.kind === "success") {
+    return {
+      title: "Interview confirmed",
+      body: "Your slot is finalized. A calendar invite has been sent.",
+      hint: state.meetingLink
+        ? "You can join directly from the meeting link below."
+        : "You can also join from your calendar event.",
+    };
+  }
+
+  const raw = state.message.toLowerCase();
+  if (raw.includes("being confirmed by another request")) {
+    return {
+      title: "Confirmation in progress",
+      body: "This slot is already being processed. Please wait a few seconds and refresh the page.",
+      hint: "If the issue persists, open the latest link from your email.",
+    };
+  }
+  if (raw.includes("expired")) {
+    return {
+      title: "This link expired",
+      body: "The interview hold window has expired.",
+      hint: "Please use the newest scheduling email to select another slot.",
+    };
+  }
+  if (raw.includes("not confirmable")) {
+    return {
+      title: "Slot already finalized",
+      body: "This interview slot is already booked or finalized.",
+      hint: "Please check your latest scheduling email for the current status.",
+    };
+  }
+  if (raw.includes("failed to fetch") || raw.includes("networkerror")) {
+    return {
+      title: "Unable to reach confirmation service",
+      body: "We could not contact the backend to verify this link right now.",
+      hint:
+        "If this slot was already booked, use your latest email link to view current status. Otherwise, retry in a moment.",
+    };
+  }
+  if (raw.includes("missing confirmation token")) {
+    return {
+      title: "Invalid confirmation link",
+      body: "This page was opened without a valid confirmation token.",
+      hint: "Please open the confirmation link directly from your email.",
+    };
+  }
+  return {
+    title: "Unable to confirm interview",
+    body: state.message,
+    hint: "Please retry from your latest email link.",
+  };
+}
+
+function InterviewConfirmContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
   const [state, setState] = useState<ConfirmState>({
@@ -61,26 +128,44 @@ export default function InterviewConfirmPage() {
     };
   }, [token]);
 
+  const ui = normalizeConfirmMessage(state);
+
   return (
     <main className="stack">
       <section className="panel stack">
-        <h1>Interview Confirmation</h1>
-        {state.kind === "loading" ? <p className="muted">{state.message}</p> : null}
+        <div className="stack-tight">
+          <p className="status-label">Interview Confirmation</p>
+          <h1>{ui.title}</h1>
+        </div>
+        <div
+          className={`status-card ${
+            state.kind === "success"
+              ? "status-card-success"
+              : state.kind === "error"
+                ? "status-card-error"
+                : "status-card-loading"
+          }`}
+        >
+          <p>{ui.body}</p>
+          {ui.hint ? <p className="muted">{ui.hint}</p> : null}
+        </div>
         {state.kind === "success" ? (
           <>
-            <p className="ok">{state.message}</p>
             {state.meetingLink ? (
-              <p>
-                Meeting link:{" "}
-                <a href={state.meetingLink} target="_blank" rel="noreferrer">
-                  {state.meetingLink}
+              <div className="row">
+                <a className="cta-button" href={state.meetingLink} target="_blank" rel="noreferrer">
+                  Open Meeting Link
                 </a>
-              </p>
+              </div>
             ) : null}
           </>
         ) : null}
-        {state.kind === "error" ? <p className="error">{state.message}</p> : null}
         <div className="row">
+          {state.kind === "error" ? (
+            <button type="button" className="cta-button-secondary" onClick={() => window.location.reload()}>
+              Retry This Link
+            </button>
+          ) : null}
           <Link href="/" className="badge">
             Back To HireMe
           </Link>
@@ -90,3 +175,24 @@ export default function InterviewConfirmPage() {
   );
 }
 
+export default function InterviewConfirmPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="stack">
+          <section className="panel stack">
+            <div className="stack-tight">
+              <p className="status-label">Interview Confirmation</p>
+              <h1>Confirming your interview</h1>
+            </div>
+            <div className="status-card status-card-loading">
+              <p>We are locking your selected slot and finalizing your calendar booking.</p>
+            </div>
+          </section>
+        </main>
+      }
+    >
+      <InterviewConfirmContent />
+    </Suspense>
+  );
+}

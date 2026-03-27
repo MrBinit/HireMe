@@ -14,6 +14,24 @@ class BedrockInvocationError(RuntimeError):
     """Raised when Bedrock invocation fails or response is malformed."""
 
 
+def _normalize_endpoint_url(value: str | None) -> str | None:
+    """Convert blank endpoint strings to None for boto client compatibility."""
+
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _normalize_optional_credential(value: str | None) -> str | None:
+    """Convert blank credential strings to None for boto credential resolution."""
+
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 class BedrockRuntimeClient:
     """Thin async wrapper around blocking boto3 Bedrock runtime client."""
 
@@ -32,10 +50,10 @@ class BedrockRuntimeClient:
         self._client = boto3.client(
             "bedrock-runtime",
             region_name=region,
-            endpoint_url=endpoint_url,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
+            aws_access_key_id=_normalize_optional_credential(aws_access_key_id),
+            aws_secret_access_key=_normalize_optional_credential(aws_secret_access_key),
+            aws_session_token=_normalize_optional_credential(aws_session_token),
             config=Config(
                 retries={"max_attempts": max(1, max_retries), "mode": "standard"},
             ),

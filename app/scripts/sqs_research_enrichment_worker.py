@@ -179,6 +179,7 @@ async def _run_worker() -> None:
     runtime_config = get_runtime_config()
     settings = get_settings()
     enrichment_config = runtime_config.research.enrichment
+    research_queue_url = enrichment_config.queue_url
 
     if not runtime_config.research.enabled:
         raise RuntimeError("research.enabled must be true to run research sqs worker")
@@ -186,8 +187,8 @@ async def _run_worker() -> None:
         raise RuntimeError("research.enrichment.provider must be 'sqs' to run research sqs worker")
     if not enrichment_config.use_queue:
         raise RuntimeError("research.enrichment.use_queue must be true to run research sqs worker")
-    if not settings.sqs_research_queue_url:
-        raise RuntimeError("SQS_RESEARCH_QUEUE_URL is required to run research sqs worker")
+    if not research_queue_url:
+        raise RuntimeError("research.enrichment.queue_url is required to run research sqs worker")
     if not settings.serpapi_api_key:
         raise RuntimeError("SERPAPI_API_KEY is required to run research sqs worker")
 
@@ -204,7 +205,7 @@ async def _run_worker() -> None:
         )
 
     queue_client = SqsQueueClient(
-        queue_url=settings.sqs_research_queue_url,
+        queue_url=research_queue_url,
         region=enrichment_config.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
@@ -228,4 +229,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from app.scripts.error import run_script_entrypoint
+
+    raise SystemExit(run_script_entrypoint(main))

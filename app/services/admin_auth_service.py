@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 
 from passlib.context import CryptContext
+from passlib.exc import PasswordValueError, UnknownHashError
 
 from app.core.runtime_config import SecurityRuntimeConfig
 from app.core.security import create_admin_access_token, decode_admin_access_token
@@ -94,7 +95,13 @@ class AdminAuthService:
         """Verify password from either bcrypt hash or plaintext env fallback."""
 
         if self._admin_password_hash:
-            return bool(_PASSWORD_CONTEXT.verify(submitted_password, self._admin_password_hash))
+            try:
+                return bool(_PASSWORD_CONTEXT.verify(submitted_password, self._admin_password_hash))
+            except (UnknownHashError, PasswordValueError, ValueError):
+                # Fall back to plaintext env only when explicitly configured.
+                if self._admin_password is not None:
+                    return secrets.compare_digest(submitted_password, self._admin_password)
+                return False
         if self._admin_password is None:
             return False
         return secrets.compare_digest(submitted_password, self._admin_password)

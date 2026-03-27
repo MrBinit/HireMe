@@ -33,6 +33,10 @@ const dashboardStatuses: ApplicantStatus[] = [
   "shortlisted",
   "in_interview",
   "offer",
+  "offer_letter_created",
+  "offer_letter_sent",
+  "offer_letter_sign",
+  "accepted",
   "rejected",
 ];
 

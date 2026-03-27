@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from pydantic import ValidationError
 
 from app.api.deps import (
@@ -32,7 +32,7 @@ from app.schemas.application import (
     InterviewSlotConfirmResponse,
     PublicApplicationStatusResponse,
 )
-from app.services.application_service import ApplicationService
+from app.services.application_service import ApplicationService, ApplicationValidationError
 from app.services.interview_scheduling_service import InterviewSchedulingService
 
 router = APIRouter(tags=["applications"])
@@ -371,3 +371,30 @@ async def list_applications(
         submitted_from=submitted_from,
         submitted_to=submitted_to,
     )
+
+
+@router.post(
+    "/integrations/docusign/webhook",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def docusign_webhook_callback(
+    request: Request,
+    application_id: UUID = Query(...),
+    token: str | None = Query(default=None),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> dict[str, bool]:
+    """Handle DocuSign envelope events and update candidate offer-signature status."""
+
+    try:
+        processed = await service.handle_docusign_webhook(
+            application_id=application_id,
+            webhook_token=token,
+            raw_body=await request.body(),
+            content_type=request.headers.get("content-type"),
+        )
+    except ApplicationValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return {"processed": bool(processed)}

@@ -88,6 +88,46 @@ def test_admin_login_rejects_invalid_credentials() -> None:
     assert "invalid admin credentials" in str(error)
 
 
+def test_admin_login_rejects_malformed_password_hash() -> None:
+    """Malformed hash should be treated as invalid credentials, not a crash."""
+
+    service = AdminAuthService(
+        admin_username="admin",
+        admin_password=None,
+        admin_password_hash="-sha256/not-a-valid-passlib-hash",
+        jwt_secret="this-is-a-long-test-secret-value-123456",
+        security_config=_security_config(),
+    )
+
+    error = None
+    try:
+        service.login(AdminLoginPayload(username="admin", password="MySecret123!"))
+    except AdminAuthError as exc:
+        error = exc
+
+    assert error is not None
+    assert "invalid admin credentials" in str(error)
+
+
+def test_admin_login_falls_back_to_plaintext_when_hash_is_malformed() -> None:
+    """Malformed hash should allow plaintext fallback when configured."""
+
+    service = AdminAuthService(
+        admin_username="admin",
+        admin_password="StrongSecret123!",
+        admin_password_hash="-sha256/not-a-valid-passlib-hash",
+        jwt_secret="this-is-a-long-test-secret-value-123456",
+        security_config=_security_config(),
+    )
+
+    response = service.login(
+        AdminLoginPayload(username="admin", password="StrongSecret123!"),
+    )
+
+    assert response.access_token
+    assert response.role == "admin"
+
+
 def test_admin_login_fails_when_configuration_missing() -> None:
     """Missing admin credentials or JWT secret should fail fast."""
 

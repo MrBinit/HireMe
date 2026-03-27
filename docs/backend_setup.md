@@ -14,7 +14,8 @@
   - Database/storage behavior in `app/config/database_config.yaml`.
   - Parse runtime/heading mapping in `app/config/parse_config.yaml`.
   - Bedrock runtime in `app/config/bedrock_config.yaml`.
-  - LLM evaluation prompt in `app/config/evaluation_config.yaml`.
+  - LLM prompts in `app/config/prompts.yaml`.
+  - Shared text/email/event templates in `app/config/templates.yaml`.
   - Scheduling runtime in `app/config/scheduling_config.yaml`.
   - Email notification runtime in `app/config/notification_config.yaml`.
   - Google API non-secret metadata in `app/config/google_api.yaml`.
@@ -149,9 +150,9 @@
   - emits issue flags (`experience_mismatch`, `missing_projects`, `skill_differences`)
   - calls Bedrock primary model first and fallback model on failure
   - persists compact structured JSON in `online_research_summary`
-- Prompt/config for phase 2 is in `app/config/research_config.yaml` under:
-  - `research.enrichment.llm_analysis_enabled`
-  - `research.enrichment.llm_prompt_template`
+- Prompt/config for phase 2 is split across:
+  - `app/config/research_config.yaml` for runtime toggles (for example `research.enrichment.llm_analysis_enabled`)
+  - `app/config/prompts.yaml` for `research.enrichment.llm_prompt_template`
 
 ## Admin JWT Protection
 - Protected with bearer JWT:
@@ -179,7 +180,8 @@
 
 ## Email Confirmation
 - After successful `POST /api/v1/applications`, backend sends a confirmation email to candidate.
-- Email templates and behavior are in `app/config/notification_config.yaml`.
+- Email templates are in `app/config/templates.yaml` under `notification`.
+- Notification behavior and provider knobs are in `app/config/notification_config.yaml`.
 - SMTP transport (`host`, `port`, `use_starttls`, `use_ssl`) is configured in `app/config/notification_config.yaml`.
 - SMTP credentials are read from `.env`:
   - `SMTP_USERNAME`
@@ -265,6 +267,13 @@
   6) Candidate may accept the invite directly in Google Calendar (`Yes`) after booking. Current implementation does not yet persist attendee `responseStatus` back into DB.
   7) Recommended follow-up: add calendar attendee response sync (polling or Google push watch) to mirror accept/decline in DB.
   8) Expiry worker releases unconfirmed holds once `interview_hold_expires_at` passes (default 24h from option send).
+  9) Same expiry worker also syncs Fireflies transcripts for `interview_booked` rows when `scheduling.fireflies.enabled=true`.
+  10) On transcript sync success, candidate row stores:
+     - `interview_transcript_url`
+     - `interview_transcript_summary`
+     - `interview_transcript_status=completed`
+     - `interview_transcript_synced_at`
+     - optional status transition `interview_schedule_status=interview_done` (configurable).
 - Parse-first strategy:
   - first stage extracts raw text from PDF/DOCX
   - parse result stores compact structured fields only:
@@ -308,34 +317,47 @@
 12. Set JWT secret in `.env`:
    - `ADMIN_JWT_SECRET`
    - optional: `INTERVIEW_CONFIRMATION_TOKEN_SECRET` (if omitted, `ADMIN_JWT_SECRET` is used for interview confirmation links)
-13. Set admin login credentials in `.env`:
+13. (Optional) enable Fireflies transcript sync:
+   - `FIREFLIES_API_KEY`
+   - optional: `FIREFLIES_WEBHOOK_SECRET`
+   - in `app/config/scheduling_config.yaml`, set `scheduling.fireflies.enabled: true`
+   - set `scheduling.fireflies.owner_email` to interviewer calendar owner (for your case: `doersbinit@gmail.com`)
+   - in Fireflies Dashboard, add webhook URL:
+     - `https://<your-domain>/api/v1/fireflies/webhook`
+     - token must match `FIREFLIES_WEBHOOK_SECRET` (if used)
+   - for dry-run/local validation without external Fireflies calls, set `scheduling.fireflies.mock_mode: true`
+14. Set admin login credentials in `.env`:
    - `ADMIN_USERNAME`
    - `ADMIN_PASSWORD_HASH` (recommended) or `ADMIN_PASSWORD` (fallback)
-14. Start API:
+15. If your DB already exists, add transcript columns once:
+   ```bash
+   venv/bin/python -m app.scripts.migrate_add_interview_transcript_columns
+   ```
+16. Start API:
    ```bash
    venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
    ```
-15. Start parse worker:
+17. Start parse worker:
    ```bash
    venv/bin/python -m app.scripts.sqs_worker
    ```
-16. Start evaluation worker:
+18. Start evaluation worker:
   ```bash
   venv/bin/python -m app.scripts.sqs_evaluation_worker
   ```
-17. Start research enrichment worker:
+19. Start research enrichment worker:
    ```bash
    venv/bin/python -m app.scripts.sqs_research_enrichment_worker
    ```
-18. Start scheduling worker:
+20. Start scheduling worker:
    ```bash
    venv/bin/python -m app.scripts.sqs_scheduling_worker
    ```
-19. Start hold-expiry worker:
+21. Start hold-expiry worker:
    ```bash
    venv/bin/python -m app.scripts.interview_hold_expiry_worker
    ```
-20. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
+22. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
 
 ## Tests
 Run the test suite:

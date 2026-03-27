@@ -378,11 +378,12 @@ async def _run_worker() -> None:
 
     runtime_config = get_runtime_config()
     settings = get_settings()
+    evaluation_queue_url = runtime_config.evaluation.queue_url
 
     if runtime_config.evaluation.provider != "sqs":
         raise RuntimeError("evaluation.provider must be 'sqs' to run evaluation sqs worker")
-    if not settings.sqs_evaluation_queue_url:
-        raise RuntimeError("SQS_EVALUATION_QUEUE_URL is required to run evaluation sqs worker")
+    if not evaluation_queue_url:
+        raise RuntimeError("evaluation.queue_url is required to run evaluation sqs worker")
 
     application_repository = PostgresApplicationRepository(
         session_factory=get_async_session_factory(runtime_config.postgres)
@@ -407,7 +408,7 @@ async def _run_worker() -> None:
     )
 
     queue_client = SqsQueueClient(
-        queue_url=settings.sqs_evaluation_queue_url,
+        queue_url=evaluation_queue_url,
         region=runtime_config.evaluation.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
@@ -417,12 +418,12 @@ async def _run_worker() -> None:
         runtime_config.research.enabled
         and enrichment_config.use_queue
         and enrichment_config.provider == "sqs"
-        and bool(settings.sqs_research_queue_url)
+        and bool(enrichment_config.queue_url)
     )
     research_queue_publisher: ResearchQueuePublisher = NoopResearchQueuePublisher()
-    if research_queue_enabled and settings.sqs_research_queue_url:
+    if research_queue_enabled and enrichment_config.queue_url:
         research_queue_publisher = SqsResearchQueuePublisher(
-            queue_url=settings.sqs_research_queue_url,
+            queue_url=enrichment_config.queue_url,
             region=enrichment_config.region,
             endpoint_url=settings.sqs_endpoint_url,
         )
@@ -438,12 +439,12 @@ async def _run_worker() -> None:
         and scheduling_config.auto_enqueue_after_shortlist
         and scheduling_config.use_queue
         and scheduling_config.provider == "sqs"
-        and bool(settings.sqs_scheduling_queue_url)
+        and bool(scheduling_config.queue_url)
     )
     scheduling_queue_publisher: SchedulingQueuePublisher = NoopSchedulingQueuePublisher()
-    if scheduling_queue_enabled and settings.sqs_scheduling_queue_url:
+    if scheduling_queue_enabled and scheduling_config.queue_url:
         scheduling_queue_publisher = SqsSchedulingQueuePublisher(
-            queue_url=settings.sqs_scheduling_queue_url,
+            queue_url=scheduling_config.queue_url,
             region=scheduling_config.region,
             endpoint_url=settings.sqs_endpoint_url,
         )
@@ -481,4 +482,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from app.scripts.error import run_script_entrypoint
+
+    raise SystemExit(run_script_entrypoint(main))

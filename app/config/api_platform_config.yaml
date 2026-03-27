@@ -65,6 +65,8 @@ timeout:
   message: request timed out
   exempt_paths:
     - /health
+    - /api/v1/applications/interview/confirm-token
+    - /api/v1/applications/interview/action-token
 
 rate_limit:
   enabled: true

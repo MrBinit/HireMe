@@ -73,7 +73,25 @@ upsert_env() {
 
 upsert_env "AWS_REGION" "${AWS_REGION}"
 upsert_env "AWS_S3_BUCKET" "${S3_BUCKET}"
-upsert_env "SQS_PARSE_QUEUE_URL" "${MAIN_URL}"
+
+if [[ ! -f "app/config/parse_config.yaml" ]]; then
+  echo "Missing app/config/parse_config.yaml"
+  exit 1
+fi
+
+sed -i '' "s#^  queue_name:.*#  queue_name: ${MAIN_QUEUE_NAME}#g" app/config/parse_config.yaml
+if grep -q "^  queue_url:" app/config/parse_config.yaml; then
+  sed -i '' "s#^  queue_url:.*#  queue_url: \"${MAIN_URL}\"#g" app/config/parse_config.yaml
+else
+  tmp_file="$(mktemp)"
+  awk -v queue_url="$MAIN_URL" '
+    { print }
+    /^  queue_name:/ {
+      print "  queue_url: \"" queue_url "\""
+    }
+  ' app/config/parse_config.yaml > "$tmp_file"
+  mv "$tmp_file" app/config/parse_config.yaml
+fi
 
 echo "ok" > /tmp/hireme-healthcheck.txt
 
@@ -90,4 +108,4 @@ aws sqs send-message \
 echo "Done"
 echo "AWS_REGION=${AWS_REGION}"
 echo "AWS_S3_BUCKET=${S3_BUCKET}"
-echo "SQS_PARSE_QUEUE_URL=${MAIN_URL}"
+echo "parse.queue_url=${MAIN_URL}"

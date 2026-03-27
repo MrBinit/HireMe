@@ -27,6 +27,9 @@ application:
   max_docx_size_mb: 10
   resume_chunk_size_bytes: 1048576
   resume_download_url_expire_seconds: 900
+  offer_letter_s3_prefix: offer-letters
+  offer_letter_download_url_expire_seconds: 900
+  slack_invite_fallback_join_url: "https://join.slack.com/t/teamhireme/shared_invite/zt-3u0zvvohs-_5mkxLnil5MLZfHMkHXsEw"
   default_list_limit: 20
   max_list_limit: 100
   applications_not_open_message: applications have not opened yet
@@ -62,3 +65,30 @@ application:
     - team
     - years
     - year
+
+docusign:
+  enabled: true
+  base_uri: https://demo.docusign.net
+  oauth_base_uri: https://account-d.docusign.com
+  account_id: "815bea97-7150-4dd2-9746-786d631b29f2"
+  webhook_url: http://localhost:8000/api/v1/integrations/docusign/webhook
+  webhook_secret_query_param: token
+  send_timeout_seconds: 20
+  oauth_timeout_seconds: 15
+  oauth_token_skew_seconds: 60
+  sign_here_x_position: "430"
+  sign_here_y_position: "720"
+  sign_here_page_number: "1"
+
+slack:
+  enabled: true
+  api_base_url: https://slack.com/api
+  send_timeout_seconds: 12
+  signature_ttl_seconds: 300
+  verify_event_signature: true
+  hr_channel_id: "C0APLNCB9LZ"
+  invite_team_id: ""
+  invite_channel_ids: []
+  onboarding_resource_links:
+    - https://intranet.hireme.ai/onboarding
+    - https://intranet.hireme.ai/handbook

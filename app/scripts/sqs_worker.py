@@ -227,11 +227,12 @@ async def _run_worker() -> None:
 
     runtime_config = get_runtime_config()
     settings = get_settings()
+    parse_queue_url = runtime_config.parse.queue_url
 
     if runtime_config.parse.provider != "sqs":
         raise RuntimeError("parse.provider must be 'sqs' to run sqs worker")
-    if not settings.sqs_parse_queue_url:
-        raise RuntimeError("SQS_PARSE_QUEUE_URL is required to run sqs worker")
+    if not parse_queue_url:
+        raise RuntimeError("parse.queue_url is required to run sqs worker")
 
     repository = PostgresApplicationRepository(
         session_factory=get_async_session_factory(runtime_config.postgres)
@@ -264,12 +265,12 @@ async def _run_worker() -> None:
     evaluation_queue_enabled = (
         evaluation_config.use_queue
         and evaluation_config.provider == "sqs"
-        and bool(settings.sqs_evaluation_queue_url)
+        and bool(evaluation_config.queue_url)
     )
     evaluation_queue_publisher: EvaluationQueuePublisher = NoopEvaluationQueuePublisher()
-    if evaluation_queue_enabled and settings.sqs_evaluation_queue_url:
+    if evaluation_queue_enabled and evaluation_config.queue_url:
         evaluation_queue_publisher = SqsEvaluationQueuePublisher(
-            queue_url=settings.sqs_evaluation_queue_url,
+            queue_url=evaluation_config.queue_url,
             region=evaluation_config.region,
             endpoint_url=settings.sqs_endpoint_url,
         )
@@ -279,7 +280,7 @@ async def _run_worker() -> None:
         )
 
     queue_client = SqsQueueClient(
-        queue_url=settings.sqs_parse_queue_url,
+        queue_url=parse_queue_url,
         region=runtime_config.parse.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
@@ -306,4 +307,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from app.scripts.error import run_script_entrypoint
+
+    raise SystemExit(run_script_entrypoint(main))

@@ -4,6 +4,8 @@ from app.schemas.application import (
     AdminCandidateReviewPayload,
     ApplicationCreatePayload,
     ApplicantStatusUpdatePayload,
+    ManagerDecisionPayload,
+    ManagerSelectionDetails,
     ApplicationRecord,
     ResumeFileMeta,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "ApplicationCreatePayload",
     "AdminCandidateReviewPayload",
     "ApplicantStatusUpdatePayload",
+    "ManagerDecisionPayload",
+    "ManagerSelectionDetails",
     "ResumeFileMeta",
     "ApplicationRecord",
     "AdminLoginPayload",

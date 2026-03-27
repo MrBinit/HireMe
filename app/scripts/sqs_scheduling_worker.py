@@ -15,6 +15,7 @@ from app.infra.google_calendar_client import GoogleCalendarClient
 from app.infra.sqs_queue import SqsMessage, SqsQueueClient
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
 from app.repositories.postgres_job_opening_repository import PostgresJobOpeningRepository
+from app.services.fireflies_service import FirefliesService
 from app.services.interview_scheduling_service import InterviewSchedulingService
 
 logging.basicConfig(
@@ -157,6 +158,7 @@ async def _run_worker() -> None:
 
     runtime_config = get_runtime_config()
     settings = get_settings()
+    scheduling_queue_url = runtime_config.scheduling.queue_url
 
     if not runtime_config.scheduling.enabled:
         raise RuntimeError("scheduling.enabled must be true to run scheduling sqs worker")
@@ -164,8 +166,8 @@ async def _run_worker() -> None:
         raise RuntimeError("scheduling.provider must be 'sqs' to run scheduling sqs worker")
     if not runtime_config.scheduling.use_queue:
         raise RuntimeError("scheduling.use_queue must be true to run scheduling sqs worker")
-    if not settings.sqs_scheduling_queue_url:
-        raise RuntimeError("SQS_SCHEDULING_QUEUE_URL is required to run scheduling sqs worker")
+    if not scheduling_queue_url:
+        raise RuntimeError("scheduling.queue_url is required to run scheduling sqs worker")
 
     application_repository = PostgresApplicationRepository(
         session_factory=get_async_session_factory(runtime_config.postgres)
@@ -191,10 +193,14 @@ async def _run_worker() -> None:
         confirmation_token_secret=(
             settings.interview_confirmation_token_secret or settings.admin_jwt_secret
         ),
+        fireflies_service=FirefliesService(
+            api_key=settings.fireflies_api_key,
+            config=runtime_config.scheduling.fireflies,
+        ),
     )
 
     queue_client = SqsQueueClient(
-        queue_url=settings.sqs_scheduling_queue_url,
+        queue_url=scheduling_queue_url,
         region=runtime_config.scheduling.region,
         endpoint_url=settings.sqs_endpoint_url,
     )
@@ -217,4 +223,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from app.scripts.error import run_script_entrypoint
+
+    raise SystemExit(run_script_entrypoint(main))

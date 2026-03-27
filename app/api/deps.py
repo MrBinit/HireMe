@@ -51,8 +51,22 @@ from app.services.reference_service import ReferenceService
 from app.services.resume_storage import ResumeStorage, S3ResumeStorage
 from app.services.candidate_evaluation_service import CandidateEvaluationService
 from app.services.interview_scheduling_service import InterviewSchedulingService
+from app.services.fireflies_service import FirefliesService
+from app.services.docusign_service import DocusignService
+from app.services.offer_letter_service import OfferLetterService
+from app.services.slack_service import SlackService
+from app.services.slack_welcome_service import SlackWelcomeService
 
 _admin_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _normalize_optional_endpoint_url(value: str | None) -> str | None:
+    """Return None for blank endpoint env values to satisfy boto client validation."""
+
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
 
 
 @lru_cache(maxsize=1)
@@ -107,7 +121,7 @@ def get_bedrock_runtime_client() -> BedrockRuntimeClient:
         aws_access_key_id=settings.aws_access_key_id,
         aws_secret_access_key=settings.aws_secret_access_key,
         aws_session_token=settings.aws_session_token,
-        endpoint_url=settings.bedrock_endpoint_url,
+        endpoint_url=_normalize_optional_endpoint_url(settings.bedrock_endpoint_url),
     )
 
 
@@ -122,15 +136,15 @@ def get_parse_queue_publisher() -> ParseQueuePublisher:
         return NoopParseQueuePublisher()
     if runtime_config.parse.provider != "sqs":
         return NoopParseQueuePublisher()
-    if not settings.sqs_parse_queue_url:
+    if not runtime_config.parse.queue_url:
         raise RuntimeError(
-            "SQS_PARSE_QUEUE_URL is required when parse.use_queue=true and provider=sqs"
+            "parse.queue_url is required when parse.use_queue=true and provider=sqs"
         )
 
     return SqsParseQueuePublisher(
-        queue_url=settings.sqs_parse_queue_url,
+        queue_url=runtime_config.parse.queue_url,
         region=runtime_config.parse.region,
-        endpoint_url=settings.sqs_endpoint_url,
+        endpoint_url=_normalize_optional_endpoint_url(settings.sqs_endpoint_url),
     )
 
 
@@ -145,15 +159,15 @@ def get_evaluation_queue_publisher() -> EvaluationQueuePublisher:
         return NoopEvaluationQueuePublisher()
     if runtime_config.evaluation.provider != "sqs":
         return NoopEvaluationQueuePublisher()
-    if not settings.sqs_evaluation_queue_url:
+    if not runtime_config.evaluation.queue_url:
         raise RuntimeError(
-            "SQS_EVALUATION_QUEUE_URL is required when evaluation.use_queue=true and provider=sqs"
+            "evaluation.queue_url is required when evaluation.use_queue=true and provider=sqs"
         )
 
     return SqsEvaluationQueuePublisher(
-        queue_url=settings.sqs_evaluation_queue_url,
+        queue_url=runtime_config.evaluation.queue_url,
         region=runtime_config.evaluation.region,
-        endpoint_url=settings.sqs_endpoint_url,
+        endpoint_url=_normalize_optional_endpoint_url(settings.sqs_endpoint_url),
     )
 
 
@@ -169,16 +183,16 @@ def get_research_queue_publisher() -> ResearchQueuePublisher:
         return NoopResearchQueuePublisher()
     if enrichment.provider != "sqs":
         return NoopResearchQueuePublisher()
-    if not settings.sqs_research_queue_url:
+    if not enrichment.queue_url:
         raise RuntimeError(
-            "SQS_RESEARCH_QUEUE_URL is required when "
+            "research.enrichment.queue_url is required when "
             "research.enrichment.use_queue=true and provider=sqs"
         )
 
     return SqsResearchQueuePublisher(
-        queue_url=settings.sqs_research_queue_url,
+        queue_url=enrichment.queue_url,
         region=enrichment.region,
-        endpoint_url=settings.sqs_endpoint_url,
+        endpoint_url=_normalize_optional_endpoint_url(settings.sqs_endpoint_url),
     )
 
 
@@ -194,16 +208,16 @@ def get_scheduling_queue_publisher() -> SchedulingQueuePublisher:
         return NoopSchedulingQueuePublisher()
     if scheduling.provider != "sqs":
         return NoopSchedulingQueuePublisher()
-    if not settings.sqs_scheduling_queue_url:
+    if not scheduling.queue_url:
         raise RuntimeError(
-            "SQS_SCHEDULING_QUEUE_URL is required when "
+            "scheduling.queue_url is required when "
             "scheduling.use_queue=true and provider=sqs"
         )
 
     return SqsSchedulingQueuePublisher(
-        queue_url=settings.sqs_scheduling_queue_url,
+        queue_url=scheduling.queue_url,
         region=scheduling.region,
-        endpoint_url=settings.sqs_endpoint_url,
+        endpoint_url=_normalize_optional_endpoint_url(settings.sqs_endpoint_url),
     )
 
 
@@ -237,10 +251,22 @@ def _build_smtp_sender(
         interview_reminder_body_template=config.interview_reminder_body_template,
         interview_confirmed_subject_template=config.interview_confirmed_subject_template,
         interview_confirmed_body_template=config.interview_confirmed_body_template,
+        interview_thank_you_subject_template=config.interview_thank_you_subject_template,
+        interview_thank_you_body_template=config.interview_thank_you_body_template,
         interview_reschedule_options_subject_template=(
             config.interview_reschedule_options_subject_template
         ),
         interview_reschedule_options_body_template=config.interview_reschedule_options_body_template,
+        offer_letter_subject_template=config.offer_letter_subject_template,
+        offer_letter_body_template=config.offer_letter_body_template,
+        manager_rejection_subject_template=config.manager_rejection_subject_template,
+        manager_rejection_body_template=config.manager_rejection_body_template,
+        offer_signed_alert_subject_template=config.offer_signed_alert_subject_template,
+        offer_signed_alert_body_template=config.offer_signed_alert_body_template,
+        slack_invite_subject_template=config.slack_invite_subject_template,
+        slack_invite_body_template=config.slack_invite_body_template,
+        slack_joined_alert_subject_template=config.slack_joined_alert_subject_template,
+        slack_joined_alert_body_template=config.slack_joined_alert_body_template,
     )
 
 
@@ -296,6 +322,79 @@ def get_application_service() -> ApplicationService:
         parse_queue_publisher=get_parse_queue_publisher(),
         notification_config=runtime_config.notification,
         email_sender=get_email_sender(),
+        offer_letter_service=get_offer_letter_service(),
+        docusign_service=get_docusign_service(),
+        slack_service=get_slack_service(),
+        slack_welcome_service=get_slack_welcome_service(),
+        s3_store=get_s3_store(),
+        s3_bucket=runtime_config.s3.bucket,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_offer_letter_service() -> OfferLetterService:
+    """Return cached secondary-model-backed offer-letter generator."""
+
+    runtime_config = get_runtime_config()
+    return OfferLetterService(
+        bedrock_client=get_bedrock_runtime_client(),
+        bedrock_config=runtime_config.bedrock,
+        evaluation_config=runtime_config.evaluation,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_docusign_service() -> DocusignService | None:
+    """Return cached DocuSign service when configured and enabled."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    service = DocusignService(
+        config=runtime_config.docusign,
+        access_token=settings.docusign_access_token,
+        integration_key=settings.docusign_integration_key,
+        user_id=settings.docusign_user_id,
+        private_key=settings.docusign_private_key,
+        private_key_path=settings.docusign_private_key_path,
+        webhook_secret=settings.docusign_webhook_secret,
+    )
+    if not service.enabled:
+        return None
+    return service
+
+
+@lru_cache(maxsize=1)
+def get_slack_service() -> SlackService | None:
+    """Return cached Slack service when configured and enabled."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    service = SlackService(
+        config=runtime_config.slack,
+        bot_token=settings.slack_bot_token,
+        admin_user_token=settings.slack_admin_user_token,
+        signing_secret=settings.slack_signing_secret,
+        client_id=settings.slack_client_id,
+        client_secret=settings.slack_client_secret,
+        bot_refresh_token=settings.slack_bot_refresh_token,
+        admin_refresh_token=settings.slack_admin_refresh_token,
+    )
+    if not service.enabled:
+        return None
+    return service
+
+
+@lru_cache(maxsize=1)
+def get_slack_welcome_service() -> SlackWelcomeService | None:
+    """Return cached Slack welcome generator when enabled."""
+
+    runtime_config = get_runtime_config()
+    if not runtime_config.slack.enabled:
+        return None
+    return SlackWelcomeService(
+        bedrock_client=get_bedrock_runtime_client(),
+        bedrock_config=runtime_config.bedrock,
+        evaluation_config=runtime_config.evaluation,
     )
 
 
@@ -337,6 +436,19 @@ def get_interview_scheduling_service() -> InterviewSchedulingService:
         confirmation_token_secret=(
             settings.interview_confirmation_token_secret or settings.admin_jwt_secret
         ),
+        fireflies_service=get_fireflies_service(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_fireflies_service() -> FirefliesService:
+    """Return cached Fireflies API service used by interview orchestration workers."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    return FirefliesService(
+        api_key=settings.fireflies_api_key,
+        config=runtime_config.scheduling.fireflies,
     )
 
 

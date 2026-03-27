@@ -103,6 +103,43 @@ class _FakeApplicationService:
         self._record = self._record.model_copy(update=updates)
         return self._record
 
+    async def record_manager_decision(
+        self,
+        *,
+        application_id,
+        decision,
+        note=None,
+        selection_details=None,
+    ):
+        if str(application_id) != str(self._record.id):
+            return None
+        if self._record.interview_schedule_status != "interview_done":
+            self._record = self._record.model_copy(
+                update={"interview_schedule_status": "interview_done"}
+            )
+
+        updates = {
+            "manager_decision": decision,
+            "manager_decision_note": note,
+            "manager_selection_details": selection_details,
+            "manager_selection_template_output": (
+                "Subject: Offer of Employment - Backend Engineer II\n\n"
+                "Dear Candidate One,\n\n"
+                "We are pleased to offer you the position of Backend Engineer II at HireMe."
+                if decision == "select"
+                else None
+            ),
+            "offer_letter_status": "created" if decision == "select" else "rejected",
+            "offer_letter_storage_path": (
+                "s3://hireme-cv-bucket/offer-letters/fake-candidate.pdf"
+                if decision == "select"
+                else None
+            ),
+            "applicant_status": "offer_letter_created" if decision == "select" else "rejected",
+        }
+        self._record = self._record.model_copy(update=updates)
+        return self._record
+
 
 class _FakeCandidateEvaluationService:
     """Minimal evaluator service for admin endpoint tests."""
@@ -357,3 +394,68 @@ def test_admin_candidate_research_queue_endpoint_enqueues_job(monkeypatch) -> No
     assert body["queued"] is True
     assert len(fake_research_queue.jobs) == 1
     assert str(fake_research_queue.jobs[0].application_id) == str(fake_service._record.id)
+
+
+def test_admin_manager_decision_select_endpoint_updates_candidate(monkeypatch) -> None:
+    """Manager decision endpoint should accept select with required details."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.patch(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/manager-decision",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "decision": "select",
+            "note": "Move to offer.",
+            "selection_details": {
+                "confirmed_job_title": "Backend Engineer II",
+                "start_date": "2026-05-01",
+                "base_salary": "USD 140,000",
+                "compensation_structure": "Base + 10% yearly bonus",
+                "equity_or_bonus": "0.1% equity",
+                "reporting_manager": "VP Engineering",
+                "custom_terms": "Remote-first role",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["manager_decision"] == "select"
+    assert body["applicant_status"] == "offer_letter_created"
+    assert body["offer_letter_status"] == "created"
+    assert body["manager_selection_details"]["confirmed_job_title"] == "Backend Engineer II"
+    assert "Offer of Employment - Backend Engineer II" in body["manager_selection_template_output"]
+
+
+def test_admin_manager_decision_select_requires_selection_details(monkeypatch) -> None:
+    """Manager select decision should fail validation without selection details."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.patch(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/manager-decision",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "decision": "select",
+            "note": "Move to offer.",
+        },
+    )
+
+    assert response.status_code == 422

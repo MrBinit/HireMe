@@ -156,6 +156,22 @@ class LocalApplicationRepository(ApplicationRepository):
                 return ApplicationRecord.model_validate(raw_record)
         return None
 
+    async def get_latest_by_email(self, *, email: str) -> ApplicationRecord | None:
+        """Return latest local application for normalized email."""
+
+        normalized_email = self._normalize_email(email)
+        raw_records = await asyncio.to_thread(self._read_records_sync)
+        matched: list[ApplicationRecord] = []
+        for item in raw_records:
+            existing = self._normalize_email(str(item.get("email", "")))
+            if existing != normalized_email:
+                continue
+            matched.append(ApplicationRecord.model_validate(item))
+        if not matched:
+            return None
+        matched.sort(key=lambda record: record.created_at, reverse=True)
+        return matched[0]
+
     async def update_parse_state(
         self,
         *,
@@ -253,6 +269,80 @@ class LocalApplicationRepository(ApplicationRepository):
                     item["candidate_brief"] = updates["candidate_brief"]
                 if "online_research_summary" in updates:
                     item["online_research_summary"] = updates["online_research_summary"]
+                if "interview_schedule_status" in updates:
+                    item["interview_schedule_status"] = updates["interview_schedule_status"]
+                if "interview_schedule_options" in updates:
+                    item["interview_schedule_options"] = updates["interview_schedule_options"]
+                if "interview_schedule_sent_at" in updates:
+                    item["interview_schedule_sent_at"] = self._json_ready(
+                        updates["interview_schedule_sent_at"]
+                    )
+                if "interview_hold_expires_at" in updates:
+                    item["interview_hold_expires_at"] = self._json_ready(
+                        updates["interview_hold_expires_at"]
+                    )
+                if "interview_calendar_email" in updates:
+                    item["interview_calendar_email"] = updates["interview_calendar_email"]
+                if "interview_schedule_error" in updates:
+                    item["interview_schedule_error"] = updates["interview_schedule_error"]
+                if "interview_transcript_status" in updates:
+                    item["interview_transcript_status"] = updates["interview_transcript_status"]
+                if "interview_transcript_url" in updates:
+                    item["interview_transcript_url"] = updates["interview_transcript_url"]
+                if "interview_transcript_summary" in updates:
+                    item["interview_transcript_summary"] = updates["interview_transcript_summary"]
+                if "interview_transcript_synced_at" in updates:
+                    item["interview_transcript_synced_at"] = self._json_ready(
+                        updates["interview_transcript_synced_at"]
+                    )
+                if "manager_decision" in updates:
+                    item["manager_decision"] = updates["manager_decision"]
+                if "manager_decision_at" in updates:
+                    item["manager_decision_at"] = self._json_ready(updates["manager_decision_at"])
+                if "manager_decision_note" in updates:
+                    item["manager_decision_note"] = updates["manager_decision_note"]
+                if "manager_selection_details" in updates:
+                    item["manager_selection_details"] = updates["manager_selection_details"]
+                if "manager_selection_template_output" in updates:
+                    item["manager_selection_template_output"] = updates[
+                        "manager_selection_template_output"
+                    ]
+                if "offer_letter_status" in updates:
+                    item["offer_letter_status"] = updates["offer_letter_status"]
+                if "offer_letter_storage_path" in updates:
+                    item["offer_letter_storage_path"] = updates["offer_letter_storage_path"]
+                if "offer_letter_generated_at" in updates:
+                    item["offer_letter_generated_at"] = self._json_ready(
+                        updates["offer_letter_generated_at"]
+                    )
+                if "offer_letter_sent_at" in updates:
+                    item["offer_letter_sent_at"] = self._json_ready(updates["offer_letter_sent_at"])
+                if "offer_letter_signed_at" in updates:
+                    item["offer_letter_signed_at"] = self._json_ready(
+                        updates["offer_letter_signed_at"]
+                    )
+                if "offer_letter_error" in updates:
+                    item["offer_letter_error"] = updates["offer_letter_error"]
+                if "docusign_envelope_id" in updates:
+                    item["docusign_envelope_id"] = updates["docusign_envelope_id"]
+                if "slack_invite_status" in updates:
+                    item["slack_invite_status"] = updates["slack_invite_status"]
+                if "slack_invited_at" in updates:
+                    item["slack_invited_at"] = self._json_ready(updates["slack_invited_at"])
+                if "slack_user_id" in updates:
+                    item["slack_user_id"] = updates["slack_user_id"]
+                if "slack_joined_at" in updates:
+                    item["slack_joined_at"] = self._json_ready(updates["slack_joined_at"])
+                if "slack_welcome_message" in updates:
+                    item["slack_welcome_message"] = updates["slack_welcome_message"]
+                if "slack_welcome_sent_at" in updates:
+                    item["slack_welcome_sent_at"] = self._json_ready(
+                        updates["slack_welcome_sent_at"]
+                    )
+                if "slack_onboarding_status" in updates:
+                    item["slack_onboarding_status"] = updates["slack_onboarding_status"]
+                if "slack_error" in updates:
+                    item["slack_error"] = updates["slack_error"]
 
                 note = updates.get("note")
                 if (
@@ -351,3 +441,11 @@ class LocalApplicationRepository(ApplicationRepository):
             ):
                 return True
         return False
+
+    @staticmethod
+    def _json_ready(value: Any) -> Any:
+        """Convert datetime values into JSON-safe ISO strings."""
+
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return value

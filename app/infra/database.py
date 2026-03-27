@@ -173,6 +173,126 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             await connection.execute(
                 text(
                     "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS manager_decision VARCHAR(16)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS manager_decision_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS manager_decision_note VARCHAR(1000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS manager_selection_details JSONB"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS manager_selection_template_output VARCHAR(8000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_status VARCHAR(32)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_storage_path VARCHAR(1024)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_generated_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_sent_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_signed_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_error VARCHAR(1000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS docusign_envelope_id VARCHAR(128)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_invite_status VARCHAR(64)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_invited_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_user_id VARCHAR(64)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_joined_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_welcome_message VARCHAR(4000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_welcome_sent_at TIMESTAMPTZ"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_onboarding_status VARCHAR(64)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS slack_error VARCHAR(1000)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
                     "ADD COLUMN IF NOT EXISTS status_history JSONB NOT NULL DEFAULT '[]'::jsonb"
                 )
             )
@@ -291,6 +411,42 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_applications_interview_schedule_status "
                     "ON applicant_applications (interview_schedule_status)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_manager_decision "
+                    "ON applicant_applications (manager_decision)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_offer_letter_status "
+                    "ON applicant_applications (offer_letter_status)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_docusign_envelope_id "
+                    "ON applicant_applications (docusign_envelope_id)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_slack_invite_status "
+                    "ON applicant_applications (slack_invite_status)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_slack_user_id "
+                    "ON applicant_applications (slack_user_id)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_applications_slack_onboarding_status "
+                    "ON applicant_applications (slack_onboarding_status)"
                 )
             )
             await connection.execute(

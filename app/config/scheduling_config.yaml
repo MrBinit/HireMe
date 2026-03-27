@@ -4,6 +4,7 @@ scheduling:
   provider: sqs
   region: us-east-1
   queue_name: hireme-interview-scheduling
+  queue_url: "https://sqs.us-east-1.amazonaws.com/173763384281/hireme-interview-scheduling"
   enqueue_timeout_seconds: 2.0
   worker_concurrency: 4
   max_in_flight_per_worker: 4
@@ -53,27 +54,29 @@ scheduling:
   move_candidate_to_in_interview_on_booking: true
   candidate_status_on_booking: in_interview
   calendar_send_updates_mode: all
-  confirmed_event_title_template: "HireMe Technical Interview - {candidate_name} ({role_title})"
-  confirmed_event_description_template: |
-    Confirmed interview scheduled by HireMe.
-    Application ID: {application_id}
-    Candidate: {candidate_name}
-    Role: {role_title}
-    Candidate email: {candidate_email}
-    Selected option: {selected_option_number}
   auto_release_expired_holds: true
-  expiry_poll_interval_seconds: 60
+  expiry_poll_interval_seconds: 15
   expiry_batch_size: 100
   expiry_target_statuses:
     - interview_options_sent
     - interview_email_sent
     - options_sent
     - interview_reschedule_options_sent
-  hold_event_title_template: "HireMe Interview Hold - {candidate_name} ({role_title})"
-  hold_event_description_template: |
-    Tentative interview hold created by HireMe.
-    Application ID: {application_id}
-    Candidate: {candidate_name}
-    Role: {role_title}
-    Hold expires at: {hold_expires_at}
-    Do not schedule conflicting meetings in this slot.
+  fireflies:
+    enabled: true
+    mock_mode: false
+    api_url: "https://api.fireflies.ai/graphql"
+    owner_email: "doersbinit@gmail.com"
+    request_timeout_seconds: 15.0
+    poll_interval_seconds: 60
+    batch_size: 50
+    join_before_minutes: 10
+    join_retry_cooldown_minutes: 5
+    transcript_poll_delay_minutes: 0
+    transcript_poll_interval_minutes: 1
+    max_poll_attempts: 180
+    transcript_lookup_hours: 72
+    transcripts_page_limit: 20
+    max_transcript_pages: 3
+    update_schedule_status_on_complete: true
+    completed_schedule_status: "interview_done"

@@ -1,0 +1,179 @@
+application:
+  manager_selection_template: |
+    Subject: Offer of Employment - {confirmed_job_title}
+
+    Dear {candidate_name},
+
+    We are pleased to offer you the position of {confirmed_job_title} at HireMe, based on your application for {role_applied}. This letter confirms the manager's selection decision and outlines the key terms of your offer.
+
+    Your anticipated start date is {start_date}, and you will report directly to {reporting_manager}. Your compensation package includes a base salary of {base_salary}, with the following compensation structure: {compensation_structure}. Equity or bonus eligibility for this role is {equity_or_bonus}.
+
+    Additional terms and conditions specific to your offer are as follows: {custom_terms}.
+
+    Please review this offer and confirm acceptance by replying from {candidate_email}. We look forward to welcoming you to HireMe.
+
+    Sincerely,
+    HireMe Hiring Team
+
+docusign:
+  envelope_subject_template: "Offer Letter - {role_title}"
+
+slack:
+  invite_custom_message_template: |
+    Hi {candidate_name}, welcome to HireMe. Please accept your Slack invitation and join us to begin onboarding for the {role_title} role.
+
+scheduling:
+  confirmed_event_title_template: "HireMe Technical Interview - {candidate_name} ({role_title})"
+  confirmed_event_description_template: |
+    Confirmed interview scheduled by HireMe.
+    Application ID: {application_id}
+    Candidate: {candidate_name}
+    Role: {role_title}
+    Candidate email: {candidate_email}
+    Selected option: {selected_option_number}
+  hold_event_title_template: "HireMe Interview Hold - {candidate_name} ({role_title})"
+  hold_event_description_template: |
+    Tentative interview hold created by HireMe.
+    Application ID: {application_id}
+    Candidate: {candidate_name}
+    Role: {role_title}
+    Hold expires at: {hold_expires_at}
+    Do not schedule conflicting meetings in this slot.
+
+notification:
+  confirmation_subject_template: "Application submitted - HireMe"
+  confirmation_body_template: |
+    Hi {candidate_name},
+
+    Thank you for applying to HireMe. Your application has been submitted.
+
+    Regards,
+    HireMe Team
+  rejection_subject_template: "Application update - HireMe"
+  rejection_body_template: |
+    Hi {candidate_name},
+
+    Thank you for applying to HireMe for the {role_title} role.
+    After review, we will not be moving ahead with your resume this time.
+
+    Regards,
+    HireMe Team
+  interview_options_subject_template: "Congratulations - Technical Interview Scheduling ({role_title})"
+  interview_options_body_template: |
+    Hi {candidate_name},
+
+    Congratulations! You have cleared the screening for the {role_title} role and moved to the technical interview round.
+    Please review the available interview slots below and click your preferred option:
+
+    {slot_options}
+
+    If these options do not work for you, use one of these links:
+    {action_links}
+
+    These slots are held temporarily and will be released at {hold_expires_at} if not confirmed.
+    Once you confirm one slot, we will finalize your technical interview booking.
+
+    Regards,
+    HireMe Team
+  interview_reminder_subject_template: "Reminder: confirm interview slot in 24 hours - HireMe ({role_title})"
+  interview_reminder_body_template: |
+    Hi {candidate_name},
+
+    This is a reminder to confirm your technical interview slot for the {role_title} role.
+    Please review the held interview slots below and click your preferred option:
+
+    {slot_options}
+
+    If these options do not work for you, use one of these links:
+    {action_links}
+
+    If you are interested, please confirm within the next 24 hours. Unconfirmed slots will expire at {hold_expires_at}.
+
+    Regards,
+    HireMe Team
+  interview_confirmed_subject_template: "Interview confirmed - HireMe ({role_title})"
+  interview_confirmed_body_template: |
+    Hi {candidate_name},
+
+    Your technical interview has been confirmed for:
+    {confirmed_slot}
+
+    {action_links}
+
+    A calendar invitation has been sent.
+
+    Regards,
+    HireMe Team
+  interview_thank_you_subject_template: "Thank you for interviewing with HireMe ({role_title})"
+  interview_thank_you_body_template: |
+    Hi {candidate_name},
+
+    Thank you for participating in the interview.
+    We will let you know the outcome soon. Stay tuned.
+
+    Regards,
+    HireMe Team
+  interview_reschedule_options_subject_template: "Action required: approve alternative interview slots - HireMe ({role_title})"
+  interview_reschedule_options_body_template: |
+    Hi Hiring Manager,
+
+    {candidate_name} requested to reschedule the technical interview for {role_title}.
+    Please review the proposed options below and click one ACCEPT link:
+
+    {slot_options}
+
+    If none work, click REJECT to request the next set of options:
+    {reject_link}
+
+    Regards,
+    HireMe Team
+  offer_letter_subject_template: "Congratulations - Offer Letter for {role_title}"
+  offer_letter_body_template: |
+    Hi {candidate_name},
+
+    Congratulations! We are excited to see you on the team.
+    Please find your offer letter attached as a PDF.
+
+    Regards,
+    HireMe Team
+  manager_rejection_subject_template: "Application update - HireMe ({role_title})"
+  manager_rejection_body_template: |
+    Hi {candidate_name},
+
+    Thank you for your time and for interviewing with us.
+    Sorry, we will not be able to move forward with your application.
+
+    Regards,
+    HireMe Team
+  offer_signed_alert_subject_template: "Signed: Offer Letter completed by {candidate_name} ({role_title})"
+  offer_signed_alert_body_template: |
+    Hi {manager_name},
+
+    {candidate_name} ({candidate_email}) has signed the offer letter for {role_title}.
+    Please review the candidate record in the admin dashboard.
+
+    Regards,
+    HireMe Team
+  slack_invite_subject_template: "Join HireMe Slack - {role_title}"
+  slack_invite_body_template: |
+    Hi {candidate_name},
+
+    Congratulations again on signing your offer for the {role_title} role.
+    Please join our Slack workspace using this invite link:
+    {slack_invite_link}
+
+    We are excited to see you in the team.
+
+    Regards,
+    HireMe Team
+  slack_joined_alert_subject_template: "Joined Slack: {candidate_name} is now onboarded ({role_title})"
+  slack_joined_alert_body_template: |
+    Hi {manager_name},
+
+    {candidate_name} ({candidate_email}) has successfully joined the HireMe Slack workspace.
+    Role: {role_title}
+    Start date: {start_date}
+    Joined at: {slack_joined_at}
+
+    Regards,
+    HireMe Team

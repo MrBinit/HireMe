@@ -32,7 +32,7 @@ def main() -> None:
     runtime_config = get_runtime_config()
 
     if not settings.admin_jwt_secret:
-        raise SystemExit("ADMIN_JWT_SECRET is required in .env")
+        raise RuntimeError("ADMIN_JWT_SECRET is required in .env")
 
     ttl = None
     if args.expires_minutes is not None:
@@ -48,4 +48,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from app.scripts.error import run_script_entrypoint
+
+    raise SystemExit(run_script_entrypoint(main))

@@ -1,16 +1,21 @@
 """Environment-backed application settings."""
 
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+USE_AWS_SECRETS_MANAGER = os.getenv("USE_AWS_SECRETS_MANAGER", "false").lower() == "true"
+ENV_FILE = None if USE_AWS_SECRETS_MANAGER else ".env"
 
 
 class Settings(BaseSettings):
     """Runtime settings loaded from `.env`."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         env_prefix="",
         case_sensitive=False,
@@ -18,10 +23,6 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "sqlite+aiosqlite:///./data/hireme.db"
-    sqs_parse_queue_url: str | None = None
-    sqs_evaluation_queue_url: str | None = None
-    sqs_research_queue_url: str | None = None
-    sqs_scheduling_queue_url: str | None = None
     sqs_endpoint_url: str | None = None
     api_platform_config_path: Path = Path("app/config/api_platform_config.yaml")
     application_config_path: Path = Path("app/config/application_config.yaml")
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
     evaluation_config_path: Path = Path("app/config/evaluation_config.yaml")
     research_config_path: Path = Path("app/config/research_config.yaml")
     scheduling_config_path: Path = Path("app/config/scheduling_config.yaml")
+    prompt_config_path: Path = Path("app/config/prompts.yaml")
+    template_config_path: Path = Path("app/config/templates.yaml")
     smtp_username: str | None = None
     smtp_password: str | None = None
     aws_access_key_id: str | None = None
@@ -58,6 +61,21 @@ class Settings(BaseSettings):
     twitter_consumer_key: str | None = None
     twitter_consumer_secret: str | None = None
     twitter_bearer_token: str | None = None
+    fireflies_api_key: str | None = None
+    fireflies_webhook_secret: str | None = None
+    docusign_access_token: str | None = None
+    docusign_integration_key: str | None = None
+    docusign_user_id: str | None = None
+    docusign_private_key: str | None = None
+    docusign_private_key_path: str | None = None
+    docusign_webhook_secret: str | None = None
+    slack_bot_token: str | None = None
+    slack_admin_user_token: str | None = None
+    slack_signing_secret: str | None = None
+    slack_client_id: str | None = None
+    slack_client_secret: str | None = None
+    slack_bot_refresh_token: str | None = None
+    slack_admin_refresh_token: str | None = None
 
 
 @lru_cache(maxsize=1)

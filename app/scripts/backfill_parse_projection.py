@@ -85,5 +85,13 @@ async def main() -> None:
     print(f"Backfill complete. Updated rows: {updated}")
 
 
-if __name__ == "__main__":
+def _run_main() -> None:
+    """Synchronous wrapper for async script entrypoint."""
+
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    from app.scripts.error import run_script_entrypoint
+
+    raise SystemExit(run_script_entrypoint(_run_main))

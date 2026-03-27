@@ -1,7 +1,7 @@
 storage:
   backend: postgres
   resume_backend: s3
-  auto_create_tables: true
+  auto_create_tables: false
 
 postgres:
   pool_size: 20

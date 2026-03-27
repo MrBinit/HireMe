@@ -20,7 +20,9 @@ from app.services.email_sender import (
     InterviewRescheduleOptionsEmail,
     InterviewSlotOptionsEmail,
 )
+from app.services.fireflies_service import FirefliesService, FirefliesTranscriptMatch
 from app.services.interview_scheduling_service import InterviewSchedulingService
+from app.scripts.interview_hold_expiry_worker import InterviewHoldExpiryWorker
 
 
 class _FakeApplicationRepository:
@@ -214,6 +216,9 @@ def test_interview_scheduling_creates_options_and_sends_email() -> None:
         assert len(payload["options"]) == 3
         assert len(email_sender.payloads) == 1
         assert len(email_sender.payloads[0].slot_option_links) == 3
+        assert len(email_sender.payloads[0].action_links) == 2
+        assert email_sender.payloads[0].action_links[0][0] == "Ask for another date"
+        assert email_sender.payloads[0].action_links[1][0] == "Cancel these slots"
 
     asyncio.run(run())
 
@@ -319,6 +324,215 @@ def test_expire_holds_releases_all_options_after_expiry() -> None:
         expired = await service.expire_candidate_holds(application_id=candidate.id, force=True)
         assert expired is True
         assert len(calendar_client.deleted_event_ids) == 3
+
+    asyncio.run(run())
+
+
+def test_confirm_interview_slot_attaches_fireflies_tracking_payload() -> None:
+    """Booking confirmation should persist Fireflies sync metadata when enabled."""
+
+    async def run() -> None:
+        candidate = _candidate(applicant_status="shortlisted")
+        application_repository = _FakeApplicationRepository(candidate)
+        calendar_client = _FakeCalendarClient()
+        email_sender = _CaptureEmailSender()
+        service = InterviewSchedulingService(
+            application_repository=application_repository,  # type: ignore[arg-type]
+            job_opening_repository=_FakeJobOpeningRepository(  # type: ignore[arg-type]
+                _opening(candidate.job_opening_id)
+            ),
+            calendar_client=calendar_client,  # type: ignore[arg-type]
+            email_sender=email_sender,
+            config=SchedulingRuntimeConfig(
+                min_slots=3,
+                max_slots=3,
+                business_days_ahead=5,
+                slot_duration_minutes=45,
+                slot_step_minutes=45,
+                business_hours_start_hour=9,
+                business_hours_end_hour=17,
+                min_notice_hours=1,
+                timezone="Asia/Kathmandu",
+                calendar_send_updates_mode="none",
+                fireflies={"enabled": True},
+            ),
+            security_config=SecurityRuntimeConfig(),
+            confirmation_token_secret="test-secret",
+            fireflies_service=FirefliesService(
+                api_key="test-fireflies-key",
+                config=SchedulingRuntimeConfig.FirefliesRuntimeConfig(enabled=True),
+            ),
+        )
+
+        await service.create_options_for_candidate(application_id=candidate.id)
+        updated = await service.confirm_candidate_slot(
+            application_id=candidate.id,
+            candidate_email="jane@example.com",
+            option_number=1,
+        )
+
+        fireflies_payload = updated.get("fireflies")
+        assert isinstance(fireflies_payload, dict)
+        assert fireflies_payload.get("status") == "scheduled"
+        assert fireflies_payload.get("manager_email") == "b.sapkota.747@westcliff.edu"
+        assert fireflies_payload.get("candidate_email") == "jane@example.com"
+        assert isinstance(updated.get("confirmed_start_at"), str)
+        assert isinstance(updated.get("confirmed_end_at"), str)
+
+    asyncio.run(run())
+
+
+def test_fireflies_mock_sync_writes_transcript_columns_and_marks_interview_done() -> None:
+    """Mock Fireflies sync should persist transcript fields and mark interview done."""
+
+    async def run() -> None:
+        candidate = _candidate(applicant_status="in_interview")
+        candidate = candidate.model_copy(
+            update={
+                "interview_schedule_status": "interview_booked",
+                "interview_calendar_email": "b.sapkota.747@westcliff.edu",
+                "interview_schedule_options": {
+                    "confirmed_event_id": "event-123",
+                    "confirmed_meeting_link": "https://meet.google.com/abc-defg-hij",
+                    "confirmed_manager_email": "b.sapkota.747@westcliff.edu",
+                    "confirmed_start_at": datetime.now(tz=timezone.utc).isoformat(),
+                    "confirmed_end_at": (
+                        datetime.now(tz=timezone.utc) + timedelta(minutes=45)
+                    ).isoformat(),
+                },
+            }
+        )
+        application_repository = _FakeApplicationRepository(candidate)
+        config = SchedulingRuntimeConfig(
+            booked_status="interview_booked",
+            fireflies={
+                "enabled": True,
+                "mock_mode": True,
+                "owner_email": "b.sapkota.747@westcliff.edu",
+                "completed_schedule_status": "interview_done",
+            },
+        )
+        worker = InterviewHoldExpiryWorker(
+            config=config,
+            session_factory=None,  # type: ignore[arg-type]
+            scheduling_service=None,  # type: ignore[arg-type]
+            application_repository=application_repository,  # type: ignore[arg-type]
+            fireflies_service=FirefliesService(
+                api_key="mock-key",
+                config=config.fireflies,
+            ),
+            email_sender=_CaptureEmailSender(),
+        )
+
+        async def _fake_fetch_ids() -> list:
+            return [candidate.id]
+
+        worker._fetch_fireflies_sync_application_ids = _fake_fetch_ids  # type: ignore[method-assign]
+        updated_count = await worker._sync_fireflies_transcripts()
+
+        refreshed = await application_repository.get_by_id(candidate.id)
+        assert updated_count == 1
+        assert refreshed is not None
+        assert refreshed.interview_schedule_status == "interview_done"
+        assert refreshed.interview_transcript_status == "completed"
+        assert isinstance(refreshed.interview_transcript_url, str)
+        assert "mock-" in refreshed.interview_transcript_url
+        assert isinstance(refreshed.interview_transcript_summary, str)
+        assert "Mock transcript summary" in refreshed.interview_transcript_summary
+        assert refreshed.interview_transcript_synced_at is not None
+
+    asyncio.run(run())
+
+
+def test_fireflies_sync_uses_fallback_when_url_and_summary_missing() -> None:
+    """Sync should fill fallback transcript data when Fireflies payload is empty."""
+
+    async def run() -> None:
+        candidate = _candidate(applicant_status="in_interview")
+        candidate = candidate.model_copy(
+            update={
+                "interview_schedule_status": "interview_booked",
+                "interview_calendar_email": "b.sapkota.747@westcliff.edu",
+                "interview_schedule_options": {
+                    "confirmed_event_id": "event-xyz",
+                    "confirmed_meeting_link": "https://meet.google.com/xyz-xyzz-xyz",
+                    "confirmed_manager_email": "b.sapkota.747@westcliff.edu",
+                    "confirmed_start_at": datetime.now(tz=timezone.utc).isoformat(),
+                    "confirmed_end_at": (
+                        datetime.now(tz=timezone.utc) + timedelta(minutes=45)
+                    ).isoformat(),
+                },
+            }
+        )
+        application_repository = _FakeApplicationRepository(candidate)
+        config = SchedulingRuntimeConfig(
+            booked_status="interview_booked",
+            fireflies={
+                "enabled": True,
+                "mock_mode": False,
+                "owner_email": "b.sapkota.747@westcliff.edu",
+                "completed_schedule_status": "interview_done",
+            },
+        )
+        fireflies_service = FirefliesService(
+            api_key="real-key",
+            config=config.fireflies,
+        )
+
+        async def _fake_request_live_capture(*, meeting_link: str, title: str | None):
+            _ = (meeting_link, title)
+            return {"success": True, "message": "ok", "error": None}
+
+        async def _fake_find_best_transcript(**kwargs):
+            _ = kwargs
+            return FirefliesTranscriptMatch(
+                transcript_id="trx-empty",
+                title="Interview",
+                transcript_url=None,
+                video_url=None,
+                meeting_link="https://meet.google.com/xyz-xyzz-xyz",
+                occurred_at=datetime.now(tz=timezone.utc),
+                summary_text=None,
+                action_items=[],
+                keywords=[],
+                raw={"source": "test"},
+            )
+
+        fireflies_service.request_live_capture = _fake_request_live_capture  # type: ignore[method-assign]
+        fireflies_service.find_best_transcript = _fake_find_best_transcript  # type: ignore[method-assign]
+
+        worker = InterviewHoldExpiryWorker(
+            config=config,
+            session_factory=None,  # type: ignore[arg-type]
+            scheduling_service=None,  # type: ignore[arg-type]
+            application_repository=application_repository,  # type: ignore[arg-type]
+            fireflies_service=fireflies_service,
+            email_sender=_CaptureEmailSender(),
+        )
+
+        async def _fake_fetch_ids() -> list:
+            return [candidate.id]
+
+        worker._fetch_fireflies_sync_application_ids = _fake_fetch_ids  # type: ignore[method-assign]
+        updated_count = await worker._sync_fireflies_transcripts()
+
+        refreshed = await application_repository.get_by_id(candidate.id)
+        assert updated_count == 1
+        assert refreshed is not None
+        assert refreshed.interview_transcript_status == "completed"
+        assert isinstance(refreshed.interview_transcript_url, str)
+        assert "mock-fallback-" in refreshed.interview_transcript_url
+        assert isinstance(refreshed.interview_transcript_summary, str)
+        assert "Mock transcript summary" in refreshed.interview_transcript_summary
+        options = refreshed.interview_schedule_options
+        assert isinstance(options, dict)
+        fireflies_payload = options.get("fireflies")
+        assert isinstance(fireflies_payload, dict)
+        transcript_payload = fireflies_payload.get("transcript")
+        assert isinstance(transcript_payload, dict)
+        raw_payload = transcript_payload.get("raw")
+        assert isinstance(raw_payload, dict)
+        assert raw_payload.get("fallback_reason") == "empty_transcript_url_and_summary"
 
     asyncio.run(run())
 
@@ -471,6 +685,56 @@ def test_candidate_reschedule_request_sends_manager_alternatives() -> None:
         assert isinstance(updated.get("reschedule"), dict)
         assert int(updated["reschedule"]["round"]) == 1
         assert len(email_sender.manager_reschedule_payloads) == 1
+
+    asyncio.run(run())
+
+
+def test_candidate_can_request_reschedule_from_pending_options_email() -> None:
+    """Candidate action-link reschedule should work before initial slot confirmation."""
+
+    async def run() -> None:
+        candidate = _candidate(applicant_status="shortlisted")
+        application_repository = _FakeApplicationRepository(candidate)
+        calendar_client = _FakeCalendarClient()
+        email_sender = _CaptureEmailSender()
+        service = InterviewSchedulingService(
+            application_repository=application_repository,  # type: ignore[arg-type]
+            job_opening_repository=_FakeJobOpeningRepository(  # type: ignore[arg-type]
+                _opening(candidate.job_opening_id)
+            ),
+            calendar_client=calendar_client,  # type: ignore[arg-type]
+            email_sender=email_sender,
+            config=SchedulingRuntimeConfig(
+                min_slots=3,
+                max_slots=5,
+                business_days_ahead=5,
+                slot_duration_minutes=45,
+                slot_step_minutes=30,
+                business_hours_start_hour=9,
+                business_hours_end_hour=17,
+                min_notice_hours=1,
+                timezone="Asia/Kathmandu",
+                calendar_send_updates_mode="none",
+            ),
+            security_config=SecurityRuntimeConfig(),
+            confirmation_token_secret="test-secret",
+        )
+
+        await service.create_options_for_candidate(application_id=candidate.id)
+        updated = await service.request_reschedule(
+            application_id=candidate.id,
+            actor="candidate",
+            candidate_email="jane@example.com",
+        )
+
+        assert isinstance(updated.get("reschedule"), dict)
+        assert int(updated["reschedule"]["round"]) == 1
+        assert len(email_sender.manager_reschedule_payloads) == 1
+        # Existing pending holds should be released before generating alternatives.
+        assert len(calendar_client.deleted_event_ids) >= 3
+        refreshed = await application_repository.get_by_id(candidate.id)
+        assert refreshed is not None
+        assert refreshed.interview_schedule_status == "interview_reschedule_options_sent"
 
     asyncio.run(run())
 
