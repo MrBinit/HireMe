@@ -205,7 +205,7 @@ def create_interview_action_token(
     round_number: int | None = None,
     candidate_email: str | None = None,
 ) -> str:
-    """Create signed token for interview action links (reschedule/reject/accept)."""
+    """Create signed token for interview action links."""
 
     now = datetime.now(tz=timezone.utc)
     normalized_expiry = expires_at.astimezone(timezone.utc)

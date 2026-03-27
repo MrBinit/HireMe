@@ -110,6 +110,7 @@ class ApplicationRecord(BaseModel):
     manager_selection_template_output: str | None = None
     offer_letter_status: str | None = None
     offer_letter_storage_path: str | None = None
+    offer_letter_signed_storage_path: str | None = None
     offer_letter_generated_at: datetime | None = None
     offer_letter_sent_at: datetime | None = None
     offer_letter_signed_at: datetime | None = None

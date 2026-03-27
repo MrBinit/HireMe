@@ -311,6 +311,10 @@ class LocalApplicationRepository(ApplicationRepository):
                     item["offer_letter_status"] = updates["offer_letter_status"]
                 if "offer_letter_storage_path" in updates:
                     item["offer_letter_storage_path"] = updates["offer_letter_storage_path"]
+                if "offer_letter_signed_storage_path" in updates:
+                    item["offer_letter_signed_storage_path"] = updates[
+                        "offer_letter_signed_storage_path"
+                    ]
                 if "offer_letter_generated_at" in updates:
                     item["offer_letter_generated_at"] = self._json_ready(
                         updates["offer_letter_generated_at"]

@@ -282,13 +282,15 @@ class InterviewHoldExpiryWorker:
                 minutes=max(0, self._config.fireflies.join_before_minutes)
             )
             live_join_close_at = meeting_end_at + timedelta(minutes=30)
+            transcript_ready_at = meeting_end_at + timedelta(
+                minutes=max(0, self._config.fireflies.transcript_poll_delay_minutes)
+            )
             bot_last_attempt = self._parse_datetime_safe(bot_request.get("last_attempt_at"))
             bot_attempts = int(bot_request.get("attempts") or 0)
             bot_status = str(bot_request.get("status") or "pending").strip().lower()
             cooldown = timedelta(minutes=max(1, self._config.fireflies.join_retry_cooldown_minutes))
             can_retry_join = bot_last_attempt is None or (now_utc - bot_last_attempt) >= cooldown
             within_live_window = live_join_open_at <= now_utc <= live_join_close_at
-            allow_initial_join_attempt_anytime = bot_attempts <= 0
             should_retry_requested_during_live_window = (
                 bot_status == "requested"
                 and within_live_window
@@ -300,7 +302,7 @@ class InterviewHoldExpiryWorker:
             )
             if (
                 not self._config.fireflies.mock_mode
-                and (within_live_window or allow_initial_join_attempt_anytime)
+                and within_live_window
                 and allow_join_for_status
                 and can_retry_join
             ):
@@ -331,10 +333,12 @@ class InterviewHoldExpiryWorker:
             sync_interval = timedelta(
                 minutes=max(1, self._config.fireflies.transcript_poll_interval_minutes)
             )
+            max_poll_attempts = max(1, self._config.fireflies.max_poll_attempts)
             should_poll = (
                 not self._config.fireflies.mock_mode
+                and now_utc >= transcript_ready_at
                 and sync_status not in {"completed", "not_found"}
-                and sync_attempts < max(1, self._config.fireflies.max_poll_attempts)
+                and sync_attempts < max_poll_attempts
                 and (last_checked_at is None or (now_utc - last_checked_at) >= sync_interval)
             )
             if should_poll:
@@ -371,57 +375,56 @@ class InterviewHoldExpiryWorker:
                         resolved_action_items = list(match.action_items)
                         resolved_keywords = list(match.keywords)
                         resolved_raw = deepcopy(match.raw)
-                        if not resolved_transcript_url and not resolved_summary:
-                            resolved_transcript_url = (
-                                f"https://app.fireflies.ai/view/mock-fallback-{application_id}"
-                            )
-                            resolved_summary = (
-                                "Mock transcript summary: Fireflies returned empty transcript URL "
-                                "and summary payload."
-                            )
-                            if not resolved_action_items:
-                                resolved_action_items = [
-                                    "Review interview notes with hiring panel.",
-                                    "Proceed with next interview decision step.",
-                                ]
-                            if not resolved_keywords:
-                                resolved_keywords = ["fireflies", "transcript-fallback"]
-                            if isinstance(resolved_raw, dict):
-                                resolved_raw["fallback_reason"] = (
-                                    "empty_transcript_url_and_summary"
-                                )
-
-                        transcript_sync["status"] = "completed"
-                        transcript_sync["last_error"] = None
-                        fireflies_state["status"] = "completed"
-                        fireflies_state["transcript"] = {
-                            "id": match.transcript_id,
-                            "title": match.title,
-                            "url": resolved_transcript_url or None,
-                            "video_url": match.video_url,
-                            "meeting_link": match.meeting_link,
-                            "occurred_at": (
-                                match.occurred_at.isoformat() if match.occurred_at else None
-                            ),
-                            "summary": resolved_summary or None,
-                            "action_items": resolved_action_items,
-                            "keywords": resolved_keywords,
-                            "raw": resolved_raw,
-                        }
-                        fireflies_state["completed_at"] = now_utc.isoformat()
-                        column_updates.update(
-                            {
-                                "interview_transcript_status": "completed",
-                                "interview_transcript_url": resolved_transcript_url or None,
-                                "interview_transcript_summary": resolved_summary or None,
-                                "interview_transcript_synced_at": now_utc,
+                        if resolved_transcript_url or resolved_summary or resolved_action_items:
+                            transcript_sync["status"] = "completed"
+                            transcript_sync["last_error"] = None
+                            fireflies_state["status"] = "completed"
+                            fireflies_state["transcript"] = {
+                                "id": match.transcript_id,
+                                "title": match.title,
+                                "url": resolved_transcript_url or None,
+                                "video_url": match.video_url,
+                                "meeting_link": match.meeting_link,
+                                "occurred_at": (
+                                    match.occurred_at.isoformat() if match.occurred_at else None
+                                ),
+                                "summary": resolved_summary or None,
+                                "action_items": resolved_action_items,
+                                "keywords": resolved_keywords,
+                                "raw": resolved_raw,
                             }
-                        )
-                        if self._config.fireflies.update_schedule_status_on_complete:
-                            column_updates["interview_schedule_status"] = (
-                                self._config.fireflies.completed_schedule_status
+                            fireflies_state["completed_at"] = now_utc.isoformat()
+                            column_updates.update(
+                                {
+                                    "interview_transcript_status": "completed",
+                                    "interview_transcript_url": resolved_transcript_url or None,
+                                    "interview_transcript_summary": resolved_summary or None,
+                                    "interview_transcript_synced_at": now_utc,
+                                }
                             )
-                    elif sync_attempts >= max(1, self._config.fireflies.max_poll_attempts):
+                            if self._config.fireflies.update_schedule_status_on_complete:
+                                column_updates["interview_schedule_status"] = (
+                                    self._config.fireflies.completed_schedule_status
+                                )
+                        elif sync_attempts >= max_poll_attempts:
+                            transcript_sync["status"] = "not_found"
+                            transcript_sync["last_error"] = (
+                                "matched Fireflies transcript has no transcript URL, summary, "
+                                "or action items"
+                            )
+                            fireflies_state["status"] = "not_found"
+                            column_updates["interview_transcript_status"] = "not_found"
+                            column_updates["interview_transcript_summary"] = (
+                                "transcript matched in Fireflies but no transcript content was available"
+                            )
+                        else:
+                            transcript_sync["status"] = "polling"
+                            transcript_sync["last_error"] = (
+                                "matched Fireflies transcript has no transcript content yet"
+                            )
+                            fireflies_state["status"] = "processing"
+                            column_updates["interview_transcript_status"] = "processing"
+                    elif sync_attempts >= max_poll_attempts:
                         transcript_sync["status"] = "not_found"
                         fireflies_state["status"] = "not_found"
                         column_updates["interview_transcript_status"] = "not_found"

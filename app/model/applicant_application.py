@@ -94,6 +94,10 @@ class ApplicantApplication(Base):
     )
     offer_letter_status: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     offer_letter_storage_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    offer_letter_signed_storage_path: Mapped[str | None] = mapped_column(
+        String(1024),
+        nullable=True,
+    )
     offer_letter_generated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

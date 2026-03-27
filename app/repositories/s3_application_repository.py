@@ -282,6 +282,10 @@ class S3ApplicationRepository(ApplicationRepository):
             update_payload["offer_letter_status"] = updates["offer_letter_status"]
         if "offer_letter_storage_path" in updates:
             update_payload["offer_letter_storage_path"] = updates["offer_letter_storage_path"]
+        if "offer_letter_signed_storage_path" in updates:
+            update_payload["offer_letter_signed_storage_path"] = updates[
+                "offer_letter_signed_storage_path"
+            ]
         if "offer_letter_generated_at" in updates:
             update_payload["offer_letter_generated_at"] = updates["offer_letter_generated_at"]
         if "offer_letter_sent_at" in updates:

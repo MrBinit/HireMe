@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import anyio
+from app.core.error import ApplicationValidationError
 from app.core.runtime_config import get_runtime_config
 from app.core.settings import get_settings
 from app.infra.bedrock_runtime import BedrockRuntimeClient
@@ -140,6 +141,15 @@ class SqsEvaluationWorker:
             await self._safe_delete(message)
             return
 
+        candidate = await self._application_repository.get_by_id(application_id)
+        if candidate is None:
+            logger.warning(
+                "candidate not found for queued evaluation message application_id=%s",
+                application_id,
+            )
+            await self._safe_delete(message)
+            return
+
         runtime_config = get_runtime_config()
         await self._application_repository.update_admin_review(
             application_id=application_id,
@@ -183,6 +193,27 @@ class SqsEvaluationWorker:
                     evaluation_score,
                     self._ai_score_threshold,
                 )
+        except ApplicationValidationError as exc:
+            error_message = str(exc)
+            if error_message == "candidate application not found":
+                logger.warning(
+                    "candidate removed during evaluation; dropping message application_id=%s",
+                    application_id,
+                )
+                await self._safe_delete(message)
+                return
+
+            await self._application_repository.update_admin_review(
+                application_id=application_id,
+                updates={
+                    "evaluation_status": "failed",
+                },
+            )
+            logger.exception(
+                "evaluation failed for application_id=%s",
+                application_id,
+            )
+            return
         except Exception:
             await self._application_repository.update_admin_review(
                 application_id=application_id,

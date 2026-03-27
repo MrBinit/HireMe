@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { processInterviewActionByToken, readApiError } from "../../../lib/api";
 
 type ActionState =
+  | { kind: "idle"; message: string }
   | { kind: "loading"; message: string }
   | { kind: "success"; message: string; meetingLink?: string | null }
   | { kind: "error"; message: string };
@@ -18,6 +19,12 @@ type UiMessage = {
 };
 
 function normalizeActionMessage(state: ActionState): UiMessage {
+  if (state.kind === "idle") {
+    return {
+      title: "Confirm interview action",
+      body: "Review this link and click process to apply the requested interview action.",
+    };
+  }
   if (state.kind === "loading") {
     return {
       title: "Processing request",
@@ -67,50 +74,49 @@ function InterviewActionContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
   const [state, setState] = useState<ActionState>({
-    kind: "loading",
-    message: "Processing interview action...",
+    kind: "idle",
+    message: "Click process to apply this interview action.",
   });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const run = async () => {
-      if (!token) {
-        if (isMounted) {
-          setState({
-            kind: "error",
-            message: "Missing action token. Please use the email CTA link.",
-          });
-        }
-        return;
-      }
-      try {
-        const response = await processInterviewActionByToken(token);
-        if (!isMounted) {
-          return;
-        }
-        setState({
-          kind: "success",
-          message: response.message,
-          meetingLink: response.confirmed_meeting_link || response.confirmed_event_link || null,
-        });
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        const message =
-          error instanceof Error
-            ? error.message
-            : readApiError(null, "Interview action failed.");
-        setState({ kind: "error", message });
-      }
-    };
-
-    run();
-    return () => {
-      isMounted = false;
-    };
+    if (!token) {
+      setState({
+        kind: "error",
+        message: "Missing action token. Please use the email CTA link.",
+      });
+      return;
+    }
+    setState({
+      kind: "idle",
+      message: "Click process to apply this interview action.",
+    });
   }, [token]);
+
+  const handleProcessClick = async () => {
+    if (!token) {
+      setState({
+        kind: "error",
+        message: "Missing action token. Please use the email CTA link.",
+      });
+      return;
+    }
+    setState({
+      kind: "loading",
+      message: "Processing interview action...",
+    });
+    try {
+      const response = await processInterviewActionByToken(token);
+      setState({
+        kind: "success",
+        message: response.message,
+        meetingLink: response.confirmed_meeting_link || response.confirmed_event_link || null,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : readApiError(null, "Interview action failed.");
+      setState({ kind: "error", message });
+    }
+  };
 
   const ui = normalizeActionMessage(state);
 
@@ -145,6 +151,26 @@ function InterviewActionContent() {
           </>
         ) : null}
         <div className="row">
+          {state.kind !== "success" && token ? (
+            <button
+              type="button"
+              className="cta-button"
+              onClick={handleProcessClick}
+              disabled={state.kind === "loading"}
+            >
+              {state.kind === "loading" ? "Processing..." : "Process This Action"}
+            </button>
+          ) : null}
+          {state.kind === "error" ? (
+            <button
+              type="button"
+              className="cta-button-secondary"
+              onClick={handleProcessClick}
+              disabled={!token}
+            >
+              Retry Action
+            </button>
+          ) : null}
           <Link href="/" className="badge">
             Back To HireMe
           </Link>

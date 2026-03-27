@@ -33,7 +33,12 @@ from app.services.email_sender import (
     OfferLetterCandidateEmail,
     SlackWorkspaceInviteEmail,
 )
-from app.services.docusign_service import DocusignEnvelopeDispatch, DocusignWebhookEvent
+from app.services.docusign_service import (
+    DocusignEnvelopeDispatch,
+    DocusignEnvelopeDocument,
+    DocusignEnvelopeStatus,
+    DocusignWebhookEvent,
+)
 from app.services.slack_service import SlackInviteResult
 from app.services.job_opening_service import JobOpeningService
 from app.services.parse_queue import (
@@ -147,10 +152,17 @@ class _FakeDocusignService:
         self.enabled = True
         self.webhook_token = webhook_token
         self.send_calls: list[tuple[str, str]] = []
+        self.download_calls: list[str] = []
+        self.status_calls: list[str] = []
         self.next_event = DocusignWebhookEvent(
             envelope_id="env-123",
             status="completed",
             raw={"status": "completed"},
+        )
+        self.next_status = DocusignEnvelopeStatus(envelope_id="env-123", status="completed")
+        self.next_document = DocusignEnvelopeDocument(
+            envelope_id="env-123",
+            pdf_bytes=b"%PDF-1.4\n% signed offer letter\n",
         )
 
     async def send_offer_for_signature(
@@ -174,13 +186,31 @@ class _FakeDocusignService:
         _ = (raw_body, content_type)
         return self.next_event
 
+    async def get_envelope_status(self, *, envelope_id: str) -> DocusignEnvelopeStatus:
+        self.status_calls.append(envelope_id)
+        return self.next_status
+
+    async def download_completed_envelope_documents(
+        self, *, envelope_id: str
+    ) -> DocusignEnvelopeDocument:
+        self.download_calls.append(envelope_id)
+        return self.next_document
+
 
 class _FakeSlackService:
     """Test Slack service for invite + webhook + messaging flow."""
 
-    def __init__(self, *, fail_invite: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_invite: bool = False,
+        invite_status: str = "invited",
+        invite_user_id: str | None = None,
+    ) -> None:
         self.enabled = True
         self.fail_invite = fail_invite
+        self.invite_status = invite_status
+        self.invite_user_id = invite_user_id
         self.invite_calls: list[tuple[str, str, str]] = []
         self.dm_calls: list[tuple[str, str]] = []
         self.hr_calls: list[str] = []
@@ -206,7 +236,7 @@ class _FakeSlackService:
         if self.fail_invite:
             raise ApplicationValidationError("slack invite blocked on this workspace plan")
         self.invite_calls.append((candidate_email, candidate_name, role_title))
-        return SlackInviteResult(status="invited")
+        return SlackInviteResult(status=self.invite_status, user_id=self.invite_user_id)
 
     async def send_direct_message(self, *, user_id: str, text: str) -> None:
         self.dm_calls.append((user_id, text))
@@ -1261,12 +1291,14 @@ def test_docusign_webhook_completed_marks_candidate_signed_and_alerts_manager(
         fake_offer_service = _FakeOfferLetterService()
         fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
         email_sender = _CaptureEmailSender()
+        fake_s3 = _FakeS3Store()
         job_service, app_service = _build_service(
             tmp_path,
             offer_letter_service=fake_offer_service,
             docusign_service=fake_docusign,
             notification_config=NotificationRuntimeConfig(enabled=True),
             email_sender=email_sender,
+            s3_store=fake_s3,
         )
         opening = await _create_opening(
             job_service,
@@ -1316,9 +1348,78 @@ def test_docusign_webhook_completed_marks_candidate_signed_and_alerts_manager(
         assert updated is not None
         assert updated.offer_letter_status == "signed"
         assert updated.offer_letter_signed_at is not None
+        assert isinstance(updated.offer_letter_signed_storage_path, str)
+        assert updated.offer_letter_signed_storage_path.startswith("s3://test-bucket/")
+        assert "/signed/" in updated.offer_letter_signed_storage_path
         assert updated.applicant_status == "offer_letter_sign"
+        assert len(fake_docusign.download_calls) == 1
+        assert len([key for key in fake_s3.objects if "/signed/" in key]) == 1
         assert len(email_sender.offer_signed_alert_payloads) == 1
         assert email_sender.offer_signed_alert_payloads[0].manager_email == opening.manager_email
+
+    asyncio.run(run())
+
+
+def test_sync_signature_status_completed_persists_signed_offer_pdf(tmp_path: Path) -> None:
+    """Manual signature sync should store signed offer PDF path when envelope is completed."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService()
+        fake_s3 = _FakeS3Store()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+            s3_store=fake_s3,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Sync Signature Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Sync Signature User",
+                email="sync-signature@example.com",
+                linkedin_url="https://www.linkedin.com/in/sync-signature-user",
+                portfolio_url="https://sync-signature.dev",
+                github_url="https://github.com/sync-signature-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Sync Signature Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=10),
+                base_salary="USD 145,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus=None,
+                reporting_manager="Hiring Manager",
+                custom_terms=None,
+            ),
+        )
+        sent = await app_service.approve_offer_letter(application_id=created.id)
+        assert sent is not None
+        assert sent.offer_letter_status == "sent_for_signature"
+
+        synced = await app_service.sync_offer_letter_signature_status(application_id=created.id)
+        assert synced is not None
+        assert synced.offer_letter_status == "signed"
+        assert synced.offer_letter_signed_at is not None
+        assert isinstance(synced.offer_letter_signed_storage_path, str)
+        assert synced.offer_letter_signed_storage_path.startswith("s3://test-bucket/")
+        assert "/signed/" in synced.offer_letter_signed_storage_path
+        assert len(fake_docusign.status_calls) == 1
+        assert len(fake_docusign.download_calls) == 1
+        assert len([key for key in fake_s3.objects if "/signed/" in key]) == 1
 
     asyncio.run(run())
 
@@ -1385,6 +1486,75 @@ def test_docusign_signed_event_triggers_slack_invite(tmp_path: Path) -> None:
         assert updated.applicant_status == "offer_letter_sign"
         assert updated.slack_invite_status == "invited"
         assert updated.slack_invited_at is not None
+
+    asyncio.run(run())
+
+
+def test_docusign_signed_event_marks_onboarded_when_already_in_workspace(tmp_path: Path) -> None:
+    """Completed signature should mark onboarding complete when Slack user already exists."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
+        fake_slack = _FakeSlackService(invite_status="already_in_workspace", invite_user_id="U42EXIST")
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            slack_service=fake_slack,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+            slack_invite_fallback_join_url="https://join.slack.com/t/hireme/shared_invite/test",
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Slack Existing Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Slack Existing User",
+                email="slack-existing@example.com",
+                linkedin_url="https://www.linkedin.com/in/slack-existing-user",
+                portfolio_url="https://slack-existing.dev",
+                github_url="https://github.com/slack-existing-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Slack Existing Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=7),
+                base_salary="USD 151,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus="0.2% equity",
+                reporting_manager="Engineering Manager",
+                custom_terms=None,
+            ),
+        )
+        await app_service.approve_offer_letter(application_id=created.id)
+        processed = await app_service.handle_docusign_webhook(
+            application_id=created.id,
+            webhook_token="hook-secret",
+            raw_body=b'{"event":"envelope-completed"}',
+            content_type="application/json",
+        )
+        assert processed is True
+
+        updated = await app_service.get_by_id(created.id)
+        assert updated is not None
+        assert updated.slack_invite_status == "already_in_workspace"
+        assert updated.slack_onboarding_status == "onboarded"
+        assert updated.slack_user_id == "U42EXIST"
+        assert updated.slack_error is None
+        assert len(email_sender.slack_invite_payloads) == 1
 
     asyncio.run(run())
 
@@ -1459,6 +1629,75 @@ def test_docusign_signed_event_uses_fallback_invite_link_email_when_slack_invite
         assert updated is not None
         assert updated.slack_invite_status == "invite_link_sent"
         assert updated.applicant_status == "offer_letter_sign"
+
+    asyncio.run(run())
+
+
+def test_sync_signature_retries_slack_invite_after_previous_failure(tmp_path: Path) -> None:
+    """Manual DocuSign sync should retry Slack invite for already-signed candidates."""
+
+    async def run() -> None:
+        fake_offer_service = _FakeOfferLetterService()
+        fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
+        fake_slack = _FakeSlackService(fail_invite=True)
+        job_service, app_service = _build_service(
+            tmp_path,
+            offer_letter_service=fake_offer_service,
+            docusign_service=fake_docusign,
+            slack_service=fake_slack,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Slack Retry Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Slack Retry User",
+                email="slack-retry@example.com",
+                linkedin_url="https://www.linkedin.com/in/slack-retry-user",
+                portfolio_url="https://slack-retry.dev",
+                github_url="https://github.com/slack-retry-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+        await app_service.update_admin_review(
+            application_id=created.id,
+            updates={"interview_schedule_status": "interview_done"},
+        )
+        await app_service.record_manager_decision(
+            application_id=created.id,
+            decision="select",
+            selection_details=ManagerSelectionDetails(
+                confirmed_job_title="Slack Retry Engineer II",
+                start_date=datetime.now(tz=timezone.utc).date() + timedelta(days=11),
+                base_salary="USD 147,000",
+                compensation_structure="Base + bonus",
+                equity_or_bonus=None,
+                reporting_manager="Engineering Manager",
+                custom_terms=None,
+            ),
+        )
+        await app_service.approve_offer_letter(application_id=created.id)
+        await app_service.handle_docusign_webhook(
+            application_id=created.id,
+            webhook_token="hook-secret",
+            raw_body=b'{"event":"envelope-completed"}',
+            content_type="application/json",
+        )
+        after_failed_invite = await app_service.get_by_id(created.id)
+        assert after_failed_invite is not None
+        assert after_failed_invite.offer_letter_status == "signed"
+        assert after_failed_invite.slack_invite_status == "failed"
+
+        fake_slack.fail_invite = False
+        synced = await app_service.sync_offer_letter_signature_status(application_id=created.id)
+        assert synced is not None
+        assert synced.slack_invite_status == "invited"
+        assert synced.slack_onboarding_status == "invited"
+        assert synced.slack_error is None
+        assert len(fake_slack.invite_calls) == 1
 
     asyncio.run(run())
 

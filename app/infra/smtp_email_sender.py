@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import smtplib
+from dataclasses import replace
 from email.message import EmailMessage
 from html import escape
 
@@ -147,8 +148,9 @@ class SmtpEmailSender(EmailSender):
         """Send one interview-slot options email to shortlisted candidate."""
 
         options_text = "\n".join(payload.slot_options)
+        candidate_action_links = self._normalize_candidate_action_links(payload.action_links)
         action_links_text = "\n".join(
-            f"{label}: {link}" for label, link in payload.action_links if link
+            f"{label}: {link}" for label, link in candidate_action_links if link
         )
         variables = {
             "candidate_name": payload.candidate_name,
@@ -158,13 +160,17 @@ class SmtpEmailSender(EmailSender):
             "slot_options": options_text,
             "action_links": action_links_text,
         }
+        body_template = self._ensure_candidate_action_links_placeholder(
+            self._interview_options_body_template
+        )
+        payload_with_ordered_actions = replace(payload, action_links=candidate_action_links)
         await self._send_templated_email(
             recipient_email=payload.candidate_email,
             variables=variables,
             subject_template=self._interview_options_subject_template,
-            body_template=self._interview_options_body_template,
+            body_template=body_template,
             html_body=self._build_interview_slots_html(
-                payload=payload,
+                payload=payload_with_ordered_actions,
                 intro_text=(
                     "Congratulations! You have cleared the screening for the "
                     f"{escape(payload.role_title)} role and moved to the technical interview round. "
@@ -186,8 +192,9 @@ class SmtpEmailSender(EmailSender):
         """Send reminder email when candidate has not selected a slot yet."""
 
         options_text = "\n".join(payload.slot_options)
+        candidate_action_links = self._normalize_candidate_action_links(payload.action_links)
         action_links_text = "\n".join(
-            f"{label}: {link}" for label, link in payload.action_links if link
+            f"{label}: {link}" for label, link in candidate_action_links if link
         )
         variables = {
             "candidate_name": payload.candidate_name,
@@ -197,13 +204,17 @@ class SmtpEmailSender(EmailSender):
             "slot_options": options_text,
             "action_links": action_links_text,
         }
+        body_template = self._ensure_candidate_action_links_placeholder(
+            self._interview_reminder_body_template
+        )
+        payload_with_ordered_actions = replace(payload, action_links=candidate_action_links)
         await self._send_templated_email(
             recipient_email=payload.candidate_email,
             variables=variables,
             subject_template=self._interview_reminder_subject_template,
-            body_template=self._interview_reminder_body_template,
+            body_template=body_template,
             html_body=self._build_interview_slots_html(
-                payload=payload,
+                payload=payload_with_ordered_actions,
                 intro_text=(
                     "This is a reminder to confirm your technical interview slot for the "
                     f"{escape(payload.role_title)} role. "
@@ -474,6 +485,42 @@ class SmtpEmailSender(EmailSender):
             f"<p>{footer_text}</p>"
             "<p>Regards,<br/>HireMe Team</p>"
         )
+
+    @staticmethod
+    def _ensure_candidate_action_links_placeholder(body_template: str) -> str:
+        """Ensure interview candidate templates include action-links placeholder block."""
+
+        if "{action_links}" in body_template:
+            return body_template
+        return (
+            body_template.rstrip()
+            + "\n\nIf these options do not work for you:\n{action_links}\n"
+        )
+
+    @staticmethod
+    def _normalize_candidate_action_links(
+        action_links: list[tuple[str, str]],
+    ) -> list[tuple[str, str]]:
+        """Keep candidate CTAs in stable order: ask-for-another-date, then cancel-slots."""
+
+        preferred_labels = ("Ask for another date", "Cancel these slots")
+        cleaned: list[tuple[str, str]] = []
+        for label, link in action_links:
+            normalized_label = (label or "").strip()
+            normalized_link = (link or "").strip()
+            if not normalized_label or not normalized_link:
+                continue
+            cleaned.append((normalized_label, normalized_link))
+        by_label: dict[str, str] = {}
+        for label, link in cleaned:
+            by_label.setdefault(label, link)
+        ordered: list[tuple[str, str]] = []
+        for label in preferred_labels:
+            link = by_label.pop(label, "")
+            if link:
+                ordered.append((label, link))
+        ordered.extend((label, link) for label, link in cleaned if label not in preferred_labels)
+        return ordered
 
     def _build_confirmed_html(self, payload: InterviewBookingConfirmedEmail) -> str:
         """Build HTML confirmation email with action CTA links."""

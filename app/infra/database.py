@@ -215,6 +215,12 @@ async def init_db_schema(config: PostgresRuntimeConfig) -> None:
             await connection.execute(
                 text(
                     "ALTER TABLE applicant_applications "
+                    "ADD COLUMN IF NOT EXISTS offer_letter_signed_storage_path VARCHAR(1024)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE applicant_applications "
                     "ADD COLUMN IF NOT EXISTS offer_letter_generated_at TIMESTAMPTZ"
                 )
             )

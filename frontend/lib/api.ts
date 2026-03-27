@@ -104,6 +104,7 @@ export interface CandidateRecord {
   manager_selection_template_output?: string | null;
   offer_letter_status?: string | null;
   offer_letter_storage_path?: string | null;
+  offer_letter_signed_storage_path?: string | null;
   offer_letter_generated_at?: string | null;
   offer_letter_sent_at?: string | null;
   offer_letter_signed_at?: string | null;

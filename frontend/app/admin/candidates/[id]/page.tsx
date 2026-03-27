@@ -613,6 +613,10 @@ export default function CandidateProfilePage() {
             : "-"}
         </p>
         <p>
+          <strong>Signed Offer S3 Path:</strong>{" "}
+          {candidate.offer_letter_signed_storage_path || "-"}
+        </p>
+        <p>
           <strong>DocuSign Envelope ID:</strong> {candidate.docusign_envelope_id || "-"}
         </p>
         <p>

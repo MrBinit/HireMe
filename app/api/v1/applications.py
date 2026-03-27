@@ -305,6 +305,13 @@ async def process_interview_action_token(
             candidate_email=claims.candidate_email,
         )
         message = "Reschedule request received. Alternative slots were sent to the interviewer."
+    elif action == "cancel_options":
+        updated_payload = await scheduling_service.cancel_pending_options(
+            application_id=claims.application_id,
+            actor=claims.actor,
+            candidate_email=claims.candidate_email,
+        )
+        message = "Interview slot options cancelled."
     elif action == "manager_accept_reschedule":
         updated_payload = await scheduling_service.process_manager_reschedule_decision(
             application_id=claims.application_id,

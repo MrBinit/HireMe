@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import { confirmInterviewSlotByToken, readApiError } from "../../../lib/api";
 
 type ConfirmState =
+  | { kind: "idle"; message: string }
   | { kind: "loading"; message: string }
   | { kind: "success"; message: string; meetingLink?: string | null }
   | { kind: "error"; message: string };
@@ -18,6 +19,12 @@ type UiMessage = {
 };
 
 function normalizeConfirmMessage(state: ConfirmState): UiMessage {
+  if (state.kind === "idle") {
+    return {
+      title: "Confirm your interview slot",
+      body: "Review this link and click confirm to finalize your interview booking.",
+    };
+  }
   if (state.kind === "loading") {
     return {
       title: "Confirming your interview",
@@ -82,51 +89,50 @@ function InterviewConfirmContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") || "";
   const [state, setState] = useState<ConfirmState>({
-    kind: "loading",
-    message: "Confirming your selected interview slot...",
+    kind: "idle",
+    message: "Click confirm to finalize your interview slot.",
   });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const run = async () => {
-      if (!token) {
-        if (isMounted) {
-          setState({
-            kind: "error",
-            message: "Missing confirmation token. Please use the link sent in email.",
-          });
-        }
-        return;
-      }
-      try {
-        const response = await confirmInterviewSlotByToken(token);
-        if (!isMounted) {
-          return;
-        }
-        setState({
-          kind: "success",
-          message:
-            "Thanks for the confirmation. Your interview slot is finalized. Best of luck for your technical round.",
-          meetingLink: response.confirmed_meeting_link || response.confirmed_event_link || null,
-        });
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        const message =
-          error instanceof Error
-            ? error.message
-            : readApiError(null, "Interview confirmation failed.");
-        setState({ kind: "error", message });
-      }
-    };
-
-    run();
-    return () => {
-      isMounted = false;
-    };
+    if (!token) {
+      setState({
+        kind: "error",
+        message: "Missing confirmation token. Please use the link sent in email.",
+      });
+      return;
+    }
+    setState({
+      kind: "idle",
+      message: "Click confirm to finalize your interview slot.",
+    });
   }, [token]);
+
+  const handleConfirmClick = async () => {
+    if (!token) {
+      setState({
+        kind: "error",
+        message: "Missing confirmation token. Please use the link sent in email.",
+      });
+      return;
+    }
+    setState({
+      kind: "loading",
+      message: "Confirming your selected interview slot...",
+    });
+    try {
+      const response = await confirmInterviewSlotByToken(token);
+      setState({
+        kind: "success",
+        message:
+          "Thanks for the confirmation. Your interview slot is finalized. Best of luck for your technical round.",
+        meetingLink: response.confirmed_meeting_link || response.confirmed_event_link || null,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : readApiError(null, "Interview confirmation failed.");
+      setState({ kind: "error", message });
+    }
+  };
 
   const ui = normalizeConfirmMessage(state);
 
@@ -161,9 +167,24 @@ function InterviewConfirmContent() {
           </>
         ) : null}
         <div className="row">
+          {state.kind !== "success" && token ? (
+            <button
+              type="button"
+              className="cta-button"
+              onClick={handleConfirmClick}
+              disabled={state.kind === "loading"}
+            >
+              {state.kind === "loading" ? "Confirming..." : "Confirm This Interview Slot"}
+            </button>
+          ) : null}
           {state.kind === "error" ? (
-            <button type="button" className="cta-button-secondary" onClick={() => window.location.reload()}>
-              Retry This Link
+            <button
+              type="button"
+              className="cta-button-secondary"
+              onClick={handleConfirmClick}
+              disabled={!token}
+            >
+              Retry Confirmation
             </button>
           ) : null}
           <Link href="/" className="badge">

@@ -214,7 +214,7 @@ async def get_candidate_offer_letter_download_url(
     service: ApplicationService = Depends(get_application_service_dep),
     s3_store: S3ObjectStore = Depends(get_s3_store),
 ) -> ResumeDownloadResponse:
-    """Return temporary pre-signed download URL for generated offer-letter PDF."""
+    """Return temporary pre-signed URL for signed offer letter (fallback: generated PDF)."""
 
     candidate = await service.get_by_id(application_id)
     if candidate is None:
@@ -222,7 +222,8 @@ async def get_candidate_offer_letter_download_url(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Candidate application not found.",
         )
-    storage_path = candidate.offer_letter_storage_path
+    signed_storage_path = candidate.offer_letter_signed_storage_path
+    storage_path = signed_storage_path or candidate.offer_letter_storage_path
     if not storage_path:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -240,7 +241,8 @@ async def get_candidate_offer_letter_download_url(
     key = parsed.path.lstrip("/")
     runtime_config = get_runtime_config()
     expires_in = runtime_config.application.offer_letter_download_url_expire_seconds
-    filename = f"offer-letter-{application_id}.pdf"
+    filename_prefix = "offer-letter-signed" if signed_storage_path else "offer-letter"
+    filename = f"{filename_prefix}-{application_id}.pdf"
     content_disposition = f'attachment; filename="{filename}"'
     download_url = await s3_store.generate_presigned_get_url(
         key=key,

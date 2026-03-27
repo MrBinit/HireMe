@@ -95,9 +95,23 @@ async def fireflies_webhook_callback(
     transcript_sync["last_checked_at"] = now_utc.isoformat()
     transcript_sync["last_error"] = None
 
-    summary_text = match.summary_text
+    summary_text = ""
+    if isinstance(match.summary_text, str):
+        summary_text = match.summary_text.strip()
     if not summary_text and match.action_items:
-        summary_text = "; ".join(match.action_items[:3])
+        summary_text = "; ".join(item.strip() for item in match.action_items[:3] if item.strip())
+    transcript_url = ""
+    if isinstance(match.transcript_url, str) and match.transcript_url.strip():
+        transcript_url = match.transcript_url.strip()
+    elif isinstance(match.video_url, str) and match.video_url.strip():
+        transcript_url = match.video_url.strip()
+    has_transcript_content = bool(transcript_url or summary_text or match.action_items)
+    if not has_transcript_content:
+        return {
+            "status": "accepted",
+            "reason": "transcript_content_missing",
+            "meeting_id": meeting_id,
+        }
 
     thank_you_state = (
         dict(fireflies_payload.get("thank_you_email"))
@@ -139,11 +153,11 @@ async def fireflies_webhook_callback(
             "transcript": {
                 "id": match.transcript_id,
                 "title": match.title,
-                "url": match.transcript_url,
+                "url": transcript_url or None,
                 "video_url": match.video_url,
                 "meeting_link": match.meeting_link,
                 "occurred_at": (match.occurred_at.isoformat() if match.occurred_at else None),
-                "summary": summary_text,
+                "summary": summary_text or None,
                 "action_items": match.action_items,
                 "keywords": match.keywords,
                 "raw": match.raw,
@@ -152,12 +166,11 @@ async def fireflies_webhook_callback(
     )
     updated_payload["fireflies"] = fireflies_payload
 
-    transcript_url = match.transcript_url or match.video_url
     updates: dict[str, Any] = {
         "interview_schedule_options": updated_payload,
         "interview_transcript_status": "completed",
-        "interview_transcript_url": transcript_url,
-        "interview_transcript_summary": summary_text,
+        "interview_transcript_url": transcript_url or None,
+        "interview_transcript_summary": summary_text or None,
         "interview_transcript_synced_at": now_utc,
     }
 

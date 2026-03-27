@@ -40,6 +40,14 @@ class DocusignEnvelopeStatus:
 
 
 @dataclass(frozen=True)
+class DocusignEnvelopeDocument:
+    """Downloaded envelope document bundle payload."""
+
+    envelope_id: str
+    pdf_bytes: bytes
+
+
+@dataclass(frozen=True)
 class DocusignWebhookEvent:
     """Normalized DocuSign webhook event details."""
 
@@ -232,6 +240,43 @@ class DocusignService:
             envelope_id=resolved_id,
             status=status,
         )
+
+    async def download_completed_envelope_documents(
+        self,
+        *,
+        envelope_id: str,
+    ) -> DocusignEnvelopeDocument:
+        """Download combined signed-envelope PDF bytes from DocuSign."""
+
+        if not self.enabled:
+            raise DocusignApiError("DocuSign is not configured")
+        normalized_id = (envelope_id or "").strip()
+        if not normalized_id:
+            raise DocusignApiError("DocuSign envelope id is required")
+
+        endpoint = (
+            f"{self._config.base_uri.rstrip('/')}/restapi/v2.1/accounts/"
+            f"{self._config.account_id.strip()}/envelopes/{normalized_id}/documents/combined"
+        )
+        headers = {
+            "Authorization": f"Bearer {await self._get_access_token()}",
+            "Accept": "application/pdf",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._config.send_timeout_seconds) as client:
+                response = await client.get(endpoint, headers=headers)
+        except Exception as exc:  # pragma: no cover - network/runtime failure
+            raise DocusignApiError(f"failed to download DocuSign envelope documents: {exc}") from exc
+
+        if response.status_code >= 400:
+            body = self._safe_json(response)
+            raise DocusignApiError(
+                "DocuSign envelope document download failed: "
+                f"{response.status_code} {self._truncate(str(body))}"
+            )
+        if not response.content:
+            raise DocusignApiError("DocuSign envelope document download returned empty payload")
+        return DocusignEnvelopeDocument(envelope_id=normalized_id, pdf_bytes=bytes(response.content))
 
     def parse_webhook_event(
         self,

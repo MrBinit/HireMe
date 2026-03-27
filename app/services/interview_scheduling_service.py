@@ -1453,12 +1453,61 @@ class InterviewSchedulingService:
             expires_at=expires_at,
             candidate_email=candidate_email,
         )
-        if not reschedule_link:
+        cancel_link = self._build_interview_action_link(
+            application_id=application_id,
+            actor="candidate",
+            action="cancel_options",
+            expires_at=expires_at,
+            candidate_email=candidate_email,
+        )
+        if not reschedule_link and not cancel_link:
             return []
-        return [
-            ("Ask for another date", reschedule_link),
-            ("Cancel these slots", reschedule_link),
-        ]
+        links: list[tuple[str, str]] = []
+        if reschedule_link:
+            links.append(("Ask for another date", reschedule_link))
+        if cancel_link:
+            links.append(("Cancel these slots", cancel_link))
+        return links
+
+    async def cancel_pending_options(
+        self,
+        *,
+        application_id: UUID,
+        actor: str,
+        candidate_email: str | None = None,
+    ) -> dict[str, Any]:
+        """Allow candidate to cancel currently held interview options from email CTA."""
+
+        normalized_actor = actor.strip().lower()
+        if normalized_actor != "candidate":
+            raise ApplicationValidationError("only candidate can cancel pending interview options")
+
+        candidate = await self._application_repository.get_by_id(application_id)
+        if candidate is None:
+            raise ApplicationValidationError("candidate application not found")
+
+        expected_email = str(candidate.email).strip().casefold()
+        if expected_email != (candidate_email or "").strip().casefold():
+            raise ApplicationValidationError("candidate email does not match application")
+
+        allowed_statuses = set(self._config.confirmable_statuses) | {
+            self._config.reschedule_options_sent_status,
+        }
+        if candidate.interview_schedule_status not in allowed_statuses:
+            raise ApplicationValidationError(
+                f"candidate interview status {candidate.interview_schedule_status} cannot be cancelled"
+            )
+
+        cancelled = await self.expire_candidate_holds(application_id=application_id, force=True)
+        if not cancelled:
+            raise ApplicationValidationError("unable to cancel interview slots for this candidate")
+
+        refreshed = await self._application_repository.get_by_id(application_id)
+        if refreshed is None:
+            raise ApplicationValidationError("candidate application not found")
+        if isinstance(refreshed.interview_schedule_options, dict):
+            return dict(refreshed.interview_schedule_options)
+        return {}
 
     def _build_confirmation_link(
         self,

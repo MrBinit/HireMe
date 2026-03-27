@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.core.error import ApplicationValidationError
 from app.infra.sqs_queue import SqsMessage
 from app.schemas.application import ApplicationRecord, ResumeFileMeta
 from app.schemas.evaluation import CandidateEvaluationResult, EvaluationBreakdown
@@ -73,6 +74,17 @@ class _FakeEvaluator:
             ),
             reason="Deterministic score for tests.",
         )
+
+
+class _RaisingEvaluator:
+    """Evaluator fake raising one predefined exception."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def evaluate_application(self, *, application_id):
+        _ = application_id
+        raise self.error
 
 
 class _FakeApplicationRepository:
@@ -174,5 +186,81 @@ def test_evaluation_worker_does_not_queue_research_when_score_is_below_threshold
 
         assert research_queue.jobs == []
         assert queue_client.deleted_receipt_handles == ["r2"]
+
+    asyncio.run(run())
+
+
+def test_evaluation_worker_drops_message_when_application_is_missing() -> None:
+    """Missing candidate should be treated as non-retryable and message should be deleted."""
+
+    async def run() -> None:
+        candidate = _build_candidate(applicant_status="screened")
+        queue_client = _FakeQueueClient()
+        app_repo = _FakeApplicationRepository(candidate)
+        research_queue = _FakeResearchQueuePublisher()
+        worker = SqsEvaluationWorker(
+            queue_client=queue_client,  # type: ignore[arg-type]
+            evaluator=_FakeEvaluator(82.0),  # type: ignore[arg-type]
+            application_repository=app_repo,  # type: ignore[arg-type]
+            research_queue_publisher=research_queue,  # type: ignore[arg-type]
+            research_queue_enabled=True,
+            research_target_statuses={"shortlisted"},
+            research_enqueue_timeout_seconds=1.0,
+            ai_score_threshold=70.0,
+            max_in_flight=1,
+            receive_batch_size=1,
+            receive_wait_seconds=1,
+            visibility_timeout_seconds=30,
+        )
+
+        message = SqsMessage(
+            message_id="e3",
+            receipt_handle="r3",
+            body=json.dumps({"application_id": str(uuid4())}),
+        )
+        await worker._process_message(message)
+
+        assert queue_client.deleted_receipt_handles == ["r3"]
+        assert app_repo.update_calls == []
+        assert research_queue.jobs == []
+
+    asyncio.run(run())
+
+
+def test_evaluation_worker_drops_message_when_candidate_removed_mid_evaluation() -> None:
+    """Candidate-not-found validation error should not be retried indefinitely."""
+
+    async def run() -> None:
+        candidate = _build_candidate(applicant_status="screened")
+        queue_client = _FakeQueueClient()
+        app_repo = _FakeApplicationRepository(candidate)
+        research_queue = _FakeResearchQueuePublisher()
+        worker = SqsEvaluationWorker(
+            queue_client=queue_client,  # type: ignore[arg-type]
+            evaluator=_RaisingEvaluator(  # type: ignore[arg-type]
+                ApplicationValidationError("candidate application not found")
+            ),
+            application_repository=app_repo,  # type: ignore[arg-type]
+            research_queue_publisher=research_queue,  # type: ignore[arg-type]
+            research_queue_enabled=True,
+            research_target_statuses={"shortlisted"},
+            research_enqueue_timeout_seconds=1.0,
+            ai_score_threshold=70.0,
+            max_in_flight=1,
+            receive_batch_size=1,
+            receive_wait_seconds=1,
+            visibility_timeout_seconds=30,
+        )
+
+        message = SqsMessage(
+            message_id="e4",
+            receipt_handle="r4",
+            body=json.dumps({"application_id": str(candidate.id)}),
+        )
+        await worker._process_message(message)
+
+        assert queue_client.deleted_receipt_handles == ["r4"]
+        assert app_repo.update_calls == [{"evaluation_status": "in_progress"}]
+        assert research_queue.jobs == []
 
     asyncio.run(run())

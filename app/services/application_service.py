@@ -197,6 +197,7 @@ class ApplicationService:
             manager_selection_template_output=None,
             offer_letter_status=None,
             offer_letter_storage_path=None,
+            offer_letter_signed_storage_path=None,
             offer_letter_generated_at=None,
             offer_letter_sent_at=None,
             offer_letter_signed_at=None,
@@ -467,6 +468,7 @@ class ApplicationService:
             updates["manager_selection_template_output"] = rendered_template
             updates["offer_letter_status"] = "created"
             updates["offer_letter_storage_path"] = storage_path
+            updates["offer_letter_signed_storage_path"] = None
             updates["offer_letter_generated_at"] = decision_time
             updates["offer_letter_sent_at"] = None
             updates["offer_letter_signed_at"] = None
@@ -479,6 +481,7 @@ class ApplicationService:
             updates["manager_selection_template_output"] = None
             updates["offer_letter_status"] = "rejected"
             updates["offer_letter_storage_path"] = None
+            updates["offer_letter_signed_storage_path"] = None
             updates["offer_letter_sent_at"] = None
             updates["offer_letter_signed_at"] = None
             updates["docusign_envelope_id"] = None
@@ -589,16 +592,33 @@ class ApplicationService:
             raise ApplicationValidationError("DocuSign envelope id does not match this candidate")
 
         updates: dict[str, object] = {}
+        transition_to_signed = False
         if event.envelope_id and not candidate.docusign_envelope_id:
             updates["docusign_envelope_id"] = event.envelope_id
 
         if event.status == "completed":
+            should_capture_signed_offer = (
+                candidate.offer_letter_status != "signed"
+                or not candidate.offer_letter_signed_storage_path
+            )
+            if should_capture_signed_offer:
+                try:
+                    updates.update(
+                        await self._build_signed_offer_storage_updates(
+                            candidate=candidate,
+                            envelope_id=event.envelope_id,
+                        )
+                    )
+                except ApplicationValidationError as exc:
+                    updates["offer_letter_error"] = self._truncate_error(str(exc))
             if candidate.offer_letter_status != "signed":
                 updates["offer_letter_status"] = "signed"
                 updates["offer_letter_signed_at"] = datetime.now(tz=timezone.utc)
                 updates["applicant_status"] = "offer_letter_sign"
-                updates["offer_letter_error"] = None
+                if "offer_letter_error" not in updates:
+                    updates["offer_letter_error"] = None
                 updates["note"] = "candidate signed offer letter in DocuSign"
+                transition_to_signed = True
         elif event.status in {"declined", "voided"}:
             updates["offer_letter_status"] = event.status
             updates["offer_letter_error"] = f"offer letter {event.status} in DocuSign"
@@ -617,8 +637,11 @@ class ApplicationService:
         refreshed = await self._repository.get_by_id(application_id)
         if refreshed is None:
             return False
-        if event.status == "completed":
+        if transition_to_signed:
             await self._send_offer_signed_alert(candidate=refreshed)
+        if refreshed.offer_letter_status == "signed" and (
+            transition_to_signed or self._needs_slack_invite_retry(refreshed)
+        ):
             await self._trigger_slack_invite_after_signature(candidate=refreshed)
         return True
 
@@ -653,11 +676,26 @@ class ApplicationService:
             updates["docusign_envelope_id"] = envelope.envelope_id
 
         if envelope.status == "completed":
+            should_capture_signed_offer = (
+                candidate.offer_letter_status != "signed"
+                or not candidate.offer_letter_signed_storage_path
+            )
+            if should_capture_signed_offer:
+                try:
+                    updates.update(
+                        await self._build_signed_offer_storage_updates(
+                            candidate=candidate,
+                            envelope_id=envelope.envelope_id,
+                        )
+                    )
+                except ApplicationValidationError as exc:
+                    updates["offer_letter_error"] = self._truncate_error(str(exc))
             if candidate.offer_letter_status != "signed":
                 updates["offer_letter_status"] = "signed"
                 updates["offer_letter_signed_at"] = datetime.now(tz=timezone.utc)
                 updates["applicant_status"] = "offer_letter_sign"
-                updates["offer_letter_error"] = None
+                if "offer_letter_error" not in updates:
+                    updates["offer_letter_error"] = None
                 updates["note"] = "candidate signed offer letter in DocuSign"
                 transition_to_signed = True
         elif envelope.status in {"declined", "voided"}:
@@ -686,7 +724,13 @@ class ApplicationService:
             return None
         if transition_to_signed:
             await self._send_offer_signed_alert(candidate=refreshed)
+        if refreshed.offer_letter_status == "signed" and (
+            transition_to_signed or self._needs_slack_invite_retry(refreshed)
+        ):
             await self._trigger_slack_invite_after_signature(candidate=refreshed)
+            latest = await self._repository.get_by_id(application_id)
+            if latest is not None:
+                return latest
         return refreshed
 
     async def retry_slack_invite(
@@ -795,9 +839,21 @@ class ApplicationService:
             }
             if invite.user_id:
                 updates["slack_user_id"] = invite.user_id
+            if invite.status in {"already_in_workspace", "already_in_team"}:
+                updates["slack_onboarding_status"] = "onboarded"
+                updates["slack_joined_at"] = now
+                updates["note"] = "candidate already in Slack workspace after offer signature"
+            elif invite.status in {"invited", "already_invited"}:
+                updates["slack_onboarding_status"] = "invited"
+                updates["note"] = "Slack invite sent after offer signature"
             await self._repository.update_admin_review(
                 application_id=candidate.id,
                 updates=updates,
+            )
+            invite_link = self._config.slack_invite_fallback_join_url.strip() or "https://app.slack.com/client"
+            await self._send_slack_invite_link_email(
+                candidate=candidate,
+                invite_link=invite_link,
             )
         except Exception as exc:
             fallback_link = self._config.slack_invite_fallback_join_url.strip()
@@ -812,6 +868,7 @@ class ApplicationService:
                         updates={
                             "slack_invite_status": "invite_link_sent",
                             "slack_invited_at": now,
+                            "slack_onboarding_status": "invited",
                             # Fallback path is successful; keep status clean for admins.
                             "slack_error": None,
                             "note": "Slack API invite failed; fallback invite link email sent",
@@ -834,10 +891,22 @@ class ApplicationService:
                 application_id=candidate.id,
                 updates={
                     "slack_invite_status": invite_status,
+                    "slack_onboarding_status": "invite_action_required"
+                    if invite_status == "action_required"
+                    else "failed",
                     "slack_error": raw_error,
                     "note": invite_note,
                 },
             )
+
+    @staticmethod
+    def _needs_slack_invite_retry(candidate: ApplicationRecord) -> bool:
+        """Return True when signed candidate still needs Slack invite/onboarding kickoff."""
+
+        status = (candidate.slack_invite_status or "").strip().casefold()
+        if not status:
+            return True
+        return status in {"failed", "action_required", "invite_link_sent"}
 
     async def _process_slack_team_join(
         self,
@@ -1057,7 +1126,7 @@ class ApplicationService:
         candidate: ApplicationRecord,
         invite_link: str,
     ) -> bool:
-        """Send fallback Slack workspace invite-link email to candidate."""
+        """Send Slack workspace onboarding email to candidate."""
 
         if not self._notification_config.enabled:
             return False
@@ -1137,6 +1206,62 @@ class ApplicationService:
             raise ApplicationValidationError("offer letter S3 storage is not configured")
         prefix = self._config.offer_letter_s3_prefix.strip("/")
         key = f"{prefix}/{application_id}.pdf"
+        await self._s3_store.put_bytes(
+            key=key,
+            payload=pdf_bytes,
+            content_type="application/pdf",
+        )
+        return f"s3://{self._s3_bucket}/{key}"
+
+    async def _build_signed_offer_storage_updates(
+        self,
+        *,
+        candidate: ApplicationRecord,
+        envelope_id: str | None,
+    ) -> dict[str, object]:
+        """Download signed DocuSign PDF and return DB updates for signed storage path."""
+
+        resolved_envelope_id = (envelope_id or candidate.docusign_envelope_id or "").strip()
+        if not resolved_envelope_id:
+            raise ApplicationValidationError("DocuSign envelope id is missing for signed offer capture")
+        if self._docusign_service is None or not self._docusign_service.enabled:
+            raise ApplicationValidationError("DocuSign is not configured")
+        try:
+            signed_document = await self._docusign_service.download_completed_envelope_documents(
+                envelope_id=resolved_envelope_id
+            )
+            signed_storage_path = await self._store_signed_offer_letter_pdf(
+                application_id=candidate.id,
+                envelope_id=signed_document.envelope_id,
+                pdf_bytes=signed_document.pdf_bytes,
+            )
+        except Exception as exc:
+            raise ApplicationValidationError(
+                f"failed to capture signed offer letter from DocuSign: {exc}"
+            ) from exc
+        return {
+            "offer_letter_signed_storage_path": signed_storage_path,
+            "offer_letter_error": None,
+        }
+
+    async def _store_signed_offer_letter_pdf(
+        self,
+        *,
+        application_id: UUID,
+        envelope_id: str,
+        pdf_bytes: bytes,
+    ) -> str:
+        """Upload signed offer-letter PDF to S3 and return s3:// path."""
+
+        if self._s3_store is None or not self._s3_bucket:
+            raise ApplicationValidationError("offer letter S3 storage is not configured")
+        if not pdf_bytes:
+            raise ApplicationValidationError("signed offer letter PDF payload is empty")
+        prefix = self._config.offer_letter_s3_prefix.strip("/")
+        normalized_envelope_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", envelope_id).strip("-")
+        if not normalized_envelope_id:
+            normalized_envelope_id = "signed"
+        key = f"{prefix}/signed/{application_id}-{normalized_envelope_id}.pdf"
         await self._s3_store.put_bytes(
             key=key,
             payload=pdf_bytes,
