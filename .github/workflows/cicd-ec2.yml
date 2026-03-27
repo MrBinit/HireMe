@@ -84,26 +84,26 @@ jobs:
           cd "$APP_DIR"
 
           cat > docker-compose.ecr.yml <<EOC
-services:
-  api:
-    image: ${IMAGE_URI}
-    build: null
-  sqs_worker:
-    image: ${IMAGE_URI}
-    build: null
-  sqs_evaluation_worker:
-    image: ${IMAGE_URI}
-    build: null
-  sqs_research_enrichment_worker:
-    image: ${IMAGE_URI}
-    build: null
-  sqs_scheduling_worker:
-    image: ${IMAGE_URI}
-    build: null
-  interview_hold_expiry_worker:
-    image: ${IMAGE_URI}
-    build: null
-EOC
+          services:
+            api:
+              image: ${IMAGE_URI}
+              build: null
+            sqs_worker:
+              image: ${IMAGE_URI}
+              build: null
+            sqs_evaluation_worker:
+              image: ${IMAGE_URI}
+              build: null
+            sqs_research_enrichment_worker:
+              image: ${IMAGE_URI}
+              build: null
+            sqs_scheduling_worker:
+              image: ${IMAGE_URI}
+              build: null
+            interview_hold_expiry_worker:
+              image: ${IMAGE_URI}
+              build: null
+          EOC
 
           if [ -n "${WEBHOOK_BASE_URL:-}" ]; then
             sed -i "s#^  webhook_url: .*#  webhook_url: ${WEBHOOK_BASE_URL}/api/v1/integrations/docusign/webhook#" app/config/application_config.yaml
