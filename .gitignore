@@ -13,3 +13,4 @@ data
 venv
 *.key
 tmp
+*.pem
