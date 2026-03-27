@@ -1,4 +1,4 @@
-# HireMe Frontend (Next.js)
+# HireMe project Frontend (Next.js)
 
 ## Setup
 
