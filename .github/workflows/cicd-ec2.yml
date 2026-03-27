@@ -82,6 +82,12 @@ jobs:
               "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
               "IMAGE_URI='${{ needs.build_and_push.outputs.image_uri }}' AWS_REGION='${{ vars.AWS_REGION }}' SECRET_REGION='${{ vars.AWS_SECRETS_MANAGER_REGION }}' SECRET_ID='${{ vars.AWS_SECRETS_MANAGER_SECRET_ID }}' APP_DIR='${{ vars.EC2_APP_DIR }}' API_WORKERS='${{ vars.API_WORKERS }}' WEBHOOK_BASE_URL='${{ vars.PUBLIC_BASE_URL }}' bash -s" <<'EOF'
           set -euo pipefail
+          APP_DIR="${APP_DIR:-$HOME/HireMe}"
+          APP_DIR="${APP_DIR/#\~/$HOME}"
+          if [ ! -d "$APP_DIR" ]; then
+            echo "Deploy path does not exist on EC2: $APP_DIR"
+            exit 1
+          fi
           cd "$APP_DIR"
 
           cat > docker-compose.ecr.yml <<EOC
