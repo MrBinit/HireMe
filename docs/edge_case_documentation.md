@@ -1,120 +1,148 @@
 # Edge Case Documentation (Top 5)
 
-This document explains the top 5 edge cases handled in the hiring pipeline, with implementation details, current status, and remaining gaps.
+This document captures the highest-impact edge cases in the hiring pipeline using a production-oriented format: severity, impact, prevention, detection, recovery, and next hardening steps.
 
-## 1) Critical Edge Case: Slot Conflict Prevention (Interview Scheduling)
+## 1) Critical: Slot Conflict Prevention (Interview Scheduling)
 
-### Risk
-When 3 candidate slots are offered but only 1 can be finalized, if the other 2 are not blocked, multiple candidates can select the same time and cause double booking.
+Severity: **HIGH**
+Impact: **Double booking, interviewer conflict, trust loss in scheduling reliability**
 
 ### What we implemented
-- On slot generation, we immediately create **real hold events** on the manager's Google Calendar for all offered options (3-5 slots).
-- Each offered option stores a `hold_event_id`; confirmation is done against that exact held event.
-- During confirmation, we perform an atomic status transition to `interview_confirming` to lock the candidate record and prevent concurrent confirm requests.
-- We promote only the selected hold into the final confirmed event (with Google Meet link + attendees).
-- We immediately release all unselected holds.
-- If candidate does not confirm in time, hold-expiry worker auto-releases expired holds.
+- Create real hold events for all offered slots (3-5) before candidate decision.
+- Persist `hold_event_id` for each option and confirm using that exact hold.
+- Use atomic state transition to `interview_confirming` before finalization.
+- Promote only the selected hold to confirmed interview.
+- Release all unselected holds immediately after confirmation.
+- Expiry worker auto-releases stale holds.
 
-### Status
-**Implemented and active**.
+### Detection and monitoring
+- Metric: `scheduling_double_booking_incidents`
+- Metric: `interview_confirm_lock_contention`
+- Log/trace: confirm attempts by `application_id`, `manager_email`, `hold_event_id`
 
-### Remaining gap / improvement
-- Current design is strong for normal operations; extra hardening can add a distributed lock keyed by `(manager_email, slot_start)` for extreme multi-worker race scenarios.
+### Recovery / fallback
+- If confirmation fails after lock, reset stale `interview_confirming` state and retry safely.
+- If stale holds exist, expiry worker reconciles and releases them.
+
+### Scalability note
+- Current lock is candidate-level atomic transition.
+- For multi-worker hardening, add distributed lock keyed by `(manager_email, slot_start)`.
+
+Status: **Implemented; additional distributed-lock hardening planned**
 
 ---
 
 ## 2) Duplicate Application (Same Email + Same Role)
 
-### Risk
-A candidate can apply repeatedly for the same role (manual retries, refreshes, bot submissions), polluting pipeline quality and inflating recruiter workload.
+Severity: **MEDIUM**
+Impact: **Data quality degradation, recruiter time waste, repeated processing costs**
 
 ### What we implemented
-- Duplicate detection is enforced at persistence level by unique email+job opening protection.
-- Email is normalized case-insensitively before duplicate checks.
-- Repository raises duplicate error; service converts it into user-facing validation message:
-  `duplicate application: this email has already applied to this job opening`.
+- Enforce uniqueness at persistence layer (email + job opening).
+- Normalize email case for duplicate checks.
+- Return deterministic user-facing duplicate message.
 
-### Status
-**Implemented and active**.
+### Detection and monitoring
+- Metric: `duplicate_application_rate`
+- Metric: `duplicate_application_by_role`
+- Log: duplicate attempt metadata (`email`, `job_opening_id`, timestamp)
 
-### Remaining gap / improvement
-- Does not merge alias emails (`name+tag@domain` vs `name@domain`) or cross-email duplicates for same person.
+### Recovery / fallback
+- Reject duplicate insert cleanly without corrupting existing record.
+- Optional next step: allow update/resubmission flow instead of hard reject.
+
+Status: **Implemented**
 
 ---
 
-## 3) Invalid Resume Upload (Format and Size)
+## 3) Invalid Resume Upload (Format / Oversize)
 
-### Risk
-Unrestricted uploads create parsing failures, storage abuse, and security exposure.
+Severity: **MEDIUM**
+Impact: **Parse failures, storage abuse, poor candidate UX**
 
 ### What we implemented
-- File type validation at submission time using extension + MIME allow-list.
-- Size caps enforced during streaming upload; oversized files are rejected with explicit error.
-- Configured limits are per file type (currently 10 MB caps).
-- Invalid format returns a clear message (`Invalid resume format...`).
+- Validate extension + MIME against allow-list.
+- Enforce streaming size cap per file type.
+- Return explicit validation errors for unsupported or oversized files.
 
-### Status
-**Implemented and active**.
+### Detection and monitoring
+- Metric: `resume_upload_rejection_rate`
+- Metric: `oversized_resume_rejections`
+- Log: rejected upload reason (`format`, `mime`, `size`)
 
-### Remaining gap / improvement
-- Current validation is metadata-based (extension/MIME). Stronger content-sniffing and malware scanning can be added.
-- Product requirement is PDF/DOCX-centric; `.doc` is still enabled for backward compatibility and can be disabled if strict compliance is required.
+### Recovery / fallback
+- Candidate receives actionable error and can re-upload valid file.
+- Upload path fails fast before downstream parse/queue processing.
+
+### Scalability note
+- Current metadata validation is fast and inexpensive.
+- Next hardening: content sniffing + malware scan pipeline.
+
+Status: **Implemented**
 
 ---
 
-## 4) Role Closed or Paused During Application
+## 4) Role Closed or Paused During Submission
 
-### Risk
-Candidate may open the form while a role is open, but submit after role is paused/closed. Without runtime validation, this creates invalid applications and poor candidate UX.
+Severity: **MEDIUM**
+Impact: **Invalid applications, candidate frustration, policy inconsistency**
 
 ### What we implemented
-- At submit time, backend re-checks role state:
-  - not yet open,
-  - paused,
-  - closed (past close date).
-- Submission is blocked with graceful role-specific messages.
-- Public role listing only returns roles currently open and unpaused.
+- Re-check role state at submit time (`not_open`, `paused`, `closed`).
+- Block submission with role-specific graceful message.
+- Only show active/unpaused roles in available roles response.
 
-### Status
-**Implemented and active**.
+### Detection and monitoring
+- Metric: `apply_blocked_paused_role`
+- Metric: `apply_blocked_closed_role`
+- Metric: `apply_blocked_not_open_yet`
 
-### Remaining gap / improvement
-- Optional enhancement: show countdown / real-time state revalidation in UI before final submit to reduce failed attempts.
+### Recovery / fallback
+- Candidate gets immediate reason and can re-apply when role reopens.
+- Prevents stale client-side role states from creating invalid backend data.
+
+Status: **Implemented**
 
 ---
 
-## 5) AI Reliability Under Noisy or Excessive External Data (Research + Scoring)
+## 5) AI Reliability Under Noisy Data (Research + Scoring)
 
-### Risk
-Research enrichment from LinkedIn/X/GitHub can produce noisy, ambiguous, or very large payloads. This can increase hallucination risk, token costs, and unstable scoring outcomes. AI scoring can also vary and introduce bias.
+Severity: **HIGH**
+Impact: **Hallucination risk, unstable scoring, bias risk, shortlist quality drift**
 
 ### What we implemented
-- **Cost-control gate before LLM:** initial keyword/skills prefilter reduces unnecessary LLM calls.
-- **Payload limiting:** caps on hits/items plus clipping/compaction before persistence to control token and storage pressure.
-- **Prompt constraints:** scoring/research prompts enforce strict JSON and "do not hallucinate" behavior.
-- **Low-variance settings:** deterministic/low-temperature inference pattern for synthesis/scoring steps.
-- **Decision gate:** threshold-based shortlist logic (`70`) plus admin override path for human correction.
-- **Fallback behavior:** deterministic fallback summaries when external extractors are missing or weak.
+- Prefilter gate before expensive scoring to reduce unnecessary LLM calls.
+- Payload compaction and clipping to constrain token size/noise.
+- Strict prompt constraints and JSON-shaped outputs.
+- Threshold gate (`70`) + admin manual override path.
+- Deterministic fallback outputs when extractors or model outputs are weak.
 
-### Status
-**Partially implemented (core controls present, deeper robustness pending)**.
+### Detection and monitoring
+- Metric: `score_variance_std` (repeat-run stability)
+- Metric: `hallucination_flag_rate` (unsupported claims)
+- Metric: `avg_tokens_per_candidate`
+- Metric: `manual_override_rate_after_ai_shortlist`
 
-### Known limitations
-- Identity resolution remains hard for common names across LinkedIn/X profiles.
-- Very high-volume profile data can still drop signal after truncation.
-- LLM score variance and fairness/bias risks are reduced but not eliminated.
+### Recovery / fallback
+- If enrichment extraction fails, use deterministic fallback brief/issue flags.
+- If evidence quality is low, route candidate to manual review path.
 
-### Improvement plan
-1. Add stronger entity-resolution scoring (email/domain/company/time overlap).
-2. Introduce semantic chunking + rank-and-select preprocessing before final LLM prompt.
-3. Add evaluation harness for score stability/bias monitoring across candidate cohorts.
-4. Add confidence score + "needs human review" flags when evidence quality is low.
+### Scalability note
+- Current truncation keeps cost controlled but may drop long-tail evidence.
+- Next step: chunk-rank-ground pipeline instead of hard clipping.
+
+### AI hardening plan
+1. Add model confidence score per recommendation.
+2. Enforce evidence grounding (each claim linked to extracted evidence chunks).
+3. Add offline evaluation loop with human feedback and bias/stability checks.
+
+Status: **Partially implemented; reliability and evaluation hardening pending**
 
 ---
 
-## Summary Status Snapshot
-- Slot conflict prevention: **Implemented**
-- Duplicate application guard: **Implemented**
-- Resume validation (format/size): **Implemented**
+## Summary
+- Slot conflict prevention: **Implemented (high-confidence core controls)**
+- Duplicate protection: **Implemented**
+- Resume upload validation: **Implemented**
 - Closed/paused role handling: **Implemented**
-- AI noisy-data + scoring reliability: **Partially implemented; hardening planned**
+- AI reliability controls: **Partially implemented, with explicit monitoring and hardening plan**

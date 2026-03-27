@@ -30,6 +30,9 @@ cors:
   enabled: true
   allow_origins:
     - http://localhost:3000
+    - http://hireme-ui.s3-website-us-east-1.amazonaws.com
+    - https://d3lsp5lbmwo1k3.cloudfront.net
+    - http://d3lsp5lbmwo1k3.cloudfront.net
   allow_methods:
     - GET
     - POST

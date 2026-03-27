@@ -426,7 +426,7 @@ export default function AdminDashboardPage() {
               {candidates.map((candidate) => (
                 <tr key={candidate.id}>
                   <td>
-                    <Link href={`/admin/candidates/${candidate.id}`}>{candidate.full_name}</Link>
+                    <Link href={`/admin/candidates?id=${candidate.id}`}>{candidate.full_name}</Link>
                   </td>
                   <td>{candidate.role_selection}</td>
                   <td>{candidate.applicant_status}</td>

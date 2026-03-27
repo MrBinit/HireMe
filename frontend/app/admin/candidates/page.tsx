@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import {
   approveOfferLetter,
@@ -17,11 +17,11 @@ import {
   retrySlackInvite,
   submitManagerDecision,
   syncOfferLetterSignatureStatus,
-} from "../../../../lib/api";
+} from "../../../lib/api";
 
 export default function CandidateProfilePage() {
   const router = useRouter();
-  const params = useParams<{ id: string }>();
+  const [candidateRouteId, setCandidateRouteId] = useState("");
   const [token, setToken] = useState<string>("");
   const [candidate, setCandidate] = useState<CandidateRecord | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -83,15 +83,22 @@ export default function CandidateProfilePage() {
       router.replace("/admin");
       return;
     }
+    const routeId = new URLSearchParams(window.location.search).get("id") || "";
+    setCandidateRouteId(routeId.trim());
     setToken(stored);
   }, [router]);
 
   const loadCandidate = async () => {
     if (!token) return;
+    if (!candidateRouteId) {
+      setError("Missing candidate id in URL.");
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/api/v1/admin/candidates/${params.id}`, {
+      const response = await fetch(`${API_BASE}/api/v1/admin/candidates/${candidateRouteId}`, {
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${token}`,
@@ -126,7 +133,7 @@ export default function CandidateProfilePage() {
   useEffect(() => {
     loadCandidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, params.id]);
+  }, [token, candidateRouteId]);
 
   useEffect(() => {
     if (!token || !candidateId) return;
@@ -167,7 +174,7 @@ export default function CandidateProfilePage() {
     let stopped = false;
     const poll = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/v1/admin/candidates/${params.id}`, {
+        const response = await fetch(`${API_BASE}/api/v1/admin/candidates/${candidateRouteId}`, {
           headers: {
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
@@ -189,7 +196,7 @@ export default function CandidateProfilePage() {
       stopped = true;
       window.clearInterval(intervalId);
     };
-  }, [token, params.id, candidateId, needsBriefRefresh, needsTranscriptRefresh]);
+  }, [token, candidateRouteId, candidateId, needsBriefRefresh, needsTranscriptRefresh]);
 
   useEffect(() => {
     if (!token || !candidateId || !candidate?.docusign_envelope_id) return;

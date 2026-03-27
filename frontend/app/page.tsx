@@ -12,7 +12,6 @@ interface SubmitState {
 export default function CandidateApplyPage() {
   const [roles, setRoles] = useState<string[]>([]);
   const [isLoadingRoles, setIsLoadingRoles] = useState(true);
-  const [rolesLoadError, setRolesLoadError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>({
     type: "idle",
@@ -40,7 +39,6 @@ export default function CandidateApplyPage() {
 
       if (directRoles.length > 0) {
         setRoles(directRoles);
-        setRolesLoadError("");
         return;
       }
 
@@ -59,12 +57,8 @@ export default function CandidateApplyPage() {
       ).sort((a, b) => a.localeCompare(b));
 
       setRoles(openingRoles);
-      setRolesLoadError(
-        openingRoles.length === 0 ? "No active job openings are available right now." : "",
-      );
     } catch {
       setRoles([]);
-      setRolesLoadError("Unable to load roles from backend.");
     } finally {
       setIsLoadingRoles(false);
     }
@@ -184,12 +178,6 @@ export default function CandidateApplyPage() {
                 ))}
               </select>
               {isLoadingRoles ? <small className="muted">Loading roles...</small> : null}
-              {!isLoadingRoles && rolesLoadError ? <small className="error">{rolesLoadError}</small> : null}
-              {!isLoadingRoles && roles.length === 0 ? (
-                <button type="button" onClick={() => void loadRoles()}>
-                  Retry roles
-                </button>
-              ) : null}
             </label>
 
             <label className="full">
