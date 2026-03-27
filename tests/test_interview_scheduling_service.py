@@ -303,6 +303,9 @@ def test_confirm_interview_slot_books_selected_and_releases_others() -> None:
         )
         assert updated["selected_option_number"] == 1
         assert "confirmed_event_id" in updated
+        assert updated.get("calendar_invite_response_status") == "accepted"
+        assert updated.get("calendar_invite_response_source") == "assumed_by_system"
+        assert isinstance(updated.get("calendar_invite_response_at"), str)
         assert len(calendar_client.confirmed_event_ids) == 1
         assert len(calendar_client.deleted_event_ids) == 2
         assert len(email_sender.confirmed_payloads) == 2
@@ -865,6 +868,9 @@ def test_manager_reject_then_accept_reschedule_round() -> None:
             option_number=1,
         )
         assert updated.get("confirmed_event_id")
+        assert updated.get("calendar_invite_response_status") == "accepted"
+        assert updated.get("calendar_invite_response_source") == "assumed_by_system"
+        assert isinstance(updated.get("calendar_invite_response_at"), str)
         refreshed = await application_repository.get_by_id(candidate.id)
         assert refreshed is not None
         assert refreshed.interview_schedule_status == "interview_booked"

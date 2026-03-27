@@ -304,6 +304,9 @@ class InterviewSchedulingService:
             updated_payload["confirmed_start_at"] = confirmed_event.start_at.isoformat()
             updated_payload["confirmed_end_at"] = confirmed_event.end_at.isoformat()
             updated_payload["confirmed_manager_email"] = manager_email
+            updated_payload["calendar_invite_response_status"] = "accepted"
+            updated_payload["calendar_invite_response_source"] = "assumed_by_system"
+            updated_payload["calendar_invite_response_at"] = now_utc.isoformat()
             updated_payload["released_hold_event_ids"] = released_event_ids
             if self._fireflies_service and self._fireflies_service.should_track_manager(
                 manager_email
@@ -910,6 +913,9 @@ class InterviewSchedulingService:
             payload["confirmed_start_at"] = confirmed_event.start_at.isoformat()
             payload["confirmed_end_at"] = confirmed_event.end_at.isoformat()
             payload["confirmed_manager_email"] = manager_email
+            payload["calendar_invite_response_status"] = "accepted"
+            payload["calendar_invite_response_source"] = "assumed_by_system"
+            payload["calendar_invite_response_at"] = now_utc.isoformat()
             payload["released_hold_event_ids"] = released_event_ids
             payload["reschedule"] = {
                 **reschedule,

@@ -33,6 +33,10 @@ This means the candidate sees real available times, and those times are already 
 
 Once the interview time is confirmed, the system sends a proper calendar invite. The candidate can accept directly from Google Calendar (the `Yes` button). The system does not wait for an email reply to treat the interview as scheduled, so it will not stay stuck waiting indefinitely.
 
+Calendar response rule used in documentation:
+- If candidate accepts in Google Calendar (`Yes`), that is treated as confirmation automatically.
+- If candidate declines (`No`), interview should be marked canceled, related schedule state should be updated, and cancellation/reschedule handling should run.
+
 ## If Candidate Wants a Different Time
 If the candidate is not comfortable with offered slots:
 1. Candidate requests reschedule.

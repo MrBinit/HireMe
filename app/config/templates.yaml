@@ -12,6 +12,8 @@ application:
 
     Please review this offer and confirm acceptance by replying from {candidate_email}. We look forward to welcoming you to HireMe.
 
+    If you need help with anything other than slot selection, cancellation, or rescheduling, please contact our team at hr@hireme.com.
+
     Sincerely,
     HireMe Hiring Team
 
@@ -73,6 +75,8 @@ notification:
     These slots are held temporarily and will be released at {hold_expires_at} if not confirmed.
     Once you confirm one slot, we will finalize your technical interview booking.
 
+    If you need help with anything other than slot selection, cancellation, or rescheduling, please contact our team at hr@hireme.com.
+
     Regards,
     HireMe Team
   interview_reminder_subject_template: "Reminder: confirm interview slot in 24 hours - HireMe ({role_title})"
@@ -88,6 +92,8 @@ notification:
     {action_links}
 
     If you are interested, please confirm within the next 24 hours. Unconfirmed slots will expire at {hold_expires_at}.
+
+    If you need help with anything other than slot selection, cancellation, or rescheduling, please contact our team at hr@hireme.com.
 
     Regards,
     HireMe Team
@@ -125,6 +131,8 @@ notification:
     If none work, click REJECT to request the next set of options:
     {reject_link}
 
+    If you need help with anything other than slot selection, cancellation, or rescheduling, please contact our team at hr@hireme.com.
+
     Regards,
     HireMe Team
   offer_letter_subject_template: "Congratulations - Offer Letter for {role_title}"
@@ -152,6 +160,8 @@ notification:
     {candidate_name} ({candidate_email}) has signed the offer letter for {role_title}.
     Please review the candidate record in the admin dashboard.
 
+    If you need help with anything other than slot selection, cancellation, or rescheduling, please contact our team at hr@hireme.com.
+
     Regards,
     HireMe Team
   slack_invite_subject_template: "Join HireMe Slack - {role_title}"
@@ -163,6 +173,7 @@ notification:
     {slack_invite_link}
 
     We are excited to see you in the team.
+    If you need help with anything other than slot selection, cancellation, or rescheduling, please contact our team at hr@hireme.com.
 
     Regards,
     HireMe Team

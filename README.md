@@ -26,6 +26,7 @@ This project includes:
 - Container registry: **AWS ECR** stores versioned Docker images for backend/frontend worker services.
 - Secrets handling: **AWS Secrets Manager** stores API keys, tokens, DB credentials, and integration secrets (DocuSign/Slack/Fireflies/etc.) instead of hardcoding in code or images.
 - Compute runtime: **AWS EC2 VM** runs pulled Docker images (from ECR) and starts application services.
+- Frontend delivery: **CloudFront** is placed in front of the frontend origin for caching, HTTPS delivery, and lower-latency global access.
 
 ### Deployment flow
 1. Build Docker images for services.
@@ -33,7 +34,8 @@ This project includes:
 3. Provision/update secrets in AWS Secrets Manager.
 4. On EC2, pull latest images from ECR.
 5. Inject secrets into runtime environment.
-6. Start/restart containers on EC2.
+6. Run backend/worker services on EC2; run frontend service on EC2 as frontend origin.
+7. Route frontend traffic through CloudFront (EC2 frontend origin) for edge delivery.
 
 ## AI Tools and Models Used
 - Primary LLM tasks (screening/research synthesis): AWS Bedrock primary model
@@ -81,6 +83,8 @@ This project includes:
 - System finds 3-5 manager slots (45 min) in next business window.
 - All offered slots are held immediately to prevent conflicts.
 - On candidate confirmation, one slot is finalized and others are released.
+- Candidate can accept directly in Google Calendar (`Yes`) without replying to email.
+- If candidate declines in Google Calendar (`No`), interview should be canceled and moved to cancellation/reschedule handling.
 
 4. Offer + onboarding:
 - Offer letter is generated and sent via DocuSign.
@@ -155,6 +159,59 @@ This project intentionally made trade-offs to deliver a working end-to-end syste
 5. LLM/Queue resilience:
 - Implement proper backpressure strategy (bounded concurrency, queue-depth-aware throttling).
 - Add LLM circuit breaker (timeout/error thresholds, open/half-open/closed states, controlled fallback routing).
+
+## LLM Evaluation (Recommended Next Step)
+Because this system uses LLMs in screening, research synthesis, offer drafting, and onboarding communication, the next major improvement would be a task-specific LLM evaluation harness. The goal would not be to measure generic model quality, but to measure whether the model is helping the hiring pipeline make better, safer, and more consistent decisions.
+
+### What should be evaluated
+1. Screening accuracy
+- Compare AI shortlist/reject outcomes against a small human-labeled evaluation set for each role.
+- Track precision, recall, and false reject rate, especially for candidates near the shortlist threshold.
+
+2. Score consistency
+- Run the same candidate through the scoring flow multiple times and measure score variance.
+- Check whether repeated runs cause unstable threshold flips around the shortlist cutoff.
+
+3. Evidence grounding
+- Evaluate whether candidate brief claims are supported by resume data or extracted external evidence.
+- Flag unsupported or weakly supported claims to reduce hallucination risk in manager-facing summaries.
+
+4. Fairness smoke tests
+- Test matched candidate pairs with similar qualifications but different names, schools, or resume phrasing.
+- Check whether score differences are driven by job-relevant evidence rather than irrelevant background signals.
+
+### Suggested evaluation dataset
+With more time, I would add a small structured dataset containing:
+- target role,
+- candidate identifier,
+- resume summary or parsed candidate payload,
+- expected decision (`reject`, `borderline`, `shortlist`),
+- expected score band,
+- evaluator notes.
+
+This would allow repeated offline evaluation without depending on live submissions.
+
+### Success metrics
+The most useful metrics for this system would be:
+- shortlist precision,
+- shortlist recall,
+- false reject rate,
+- average score variance across repeated runs,
+- grounding pass rate for generated briefs,
+- fairness observations from matched-profile tests.
+
+### Why this matters
+This would improve performance in three ways:
+- better screening quality by catching weak prompt/model behavior early,
+- better operational trust by making score and brief outputs more consistent,
+- better risk control by identifying hallucination and bias issues before they affect hiring decisions.
+
+### Planned implementation approach
+If extended further, I would add:
+- a versioned evaluation dataset in the repository,
+- a script to run batch scoring and summarization evaluations,
+- regression reporting for prompt/model changes,
+- confidence-based routing or human-review escalation when evidence quality is weak.
 
 ## Documentation Index
 - [docs/candidate_career_page_implementation.md](docs/candidate_career_page_implementation.md)

@@ -192,7 +192,7 @@ export default function CandidateProfilePage() {
   }, [token, params.id, candidateId, needsBriefRefresh, needsTranscriptRefresh]);
 
   useEffect(() => {
-    if (!token || !candidate || !candidate.docusign_envelope_id) return;
+    if (!token || !candidateId || !candidate?.docusign_envelope_id) return;
     if (candidate.offer_letter_status !== "sent_for_signature") return;
 
     let stopped = false;
@@ -201,7 +201,7 @@ export default function CandidateProfilePage() {
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        const updated = await syncOfferLetterSignatureStatus(candidate.id, token);
+        const updated = await syncOfferLetterSignatureStatus(candidateId, token);
         if (!stopped) {
           setCandidate(updated);
         }
@@ -220,7 +220,7 @@ export default function CandidateProfilePage() {
       stopped = true;
       window.clearInterval(intervalId);
     };
-  }, [token, candidate]);
+  }, [token, candidateId, candidate?.docusign_envelope_id, candidate?.offer_letter_status]);
 
   const onDownloadResume = async () => {
     if (!token || !candidate) return;
