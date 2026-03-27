@@ -31,11 +31,17 @@ This means the candidate sees real available times, and those times are already 
 6. We send calendar updates/invites.
 7. We release the remaining held slots.
 
-Once the interview time is confirmed, the system sends a proper calendar invite. The candidate can accept directly from Google Calendar (the `Yes` button). The system does not wait for an email reply to treat the interview as scheduled, so it will not stay stuck waiting indefinitely.
+Once the interview time is confirmed via candidate slot selection, the system sends a proper calendar invite. The candidate can accept directly from Google Calendar (the `Yes` button). The system does not wait for an email reply to treat the interview as scheduled, so it will not stay stuck waiting indefinitely.
 
-Calendar response rule used in documentation:
-- If candidate accepts in Google Calendar (`Yes`), that is treated as confirmation automatically.
-- If candidate declines (`No`), interview should be marked canceled, related schedule state should be updated, and cancellation/reschedule handling should run.
+### Current implementation vs planned behavior
+- Implemented:
+  - Booking is finalized at confirmation API time (not by waiting for email replies).
+  - 24-hour follow-up reminder for no-response candidates.
+  - 48-hour hold expiry and auto-release of unconfirmed slots.
+  - Candidate reschedule/cancel action links in scheduling emails.
+- Planned hardening:
+  - Sync attendee `responseStatus` (`accepted`/`declined`) from Google Calendar events into DB.
+  - Auto-trigger cancellation/reschedule workflow when candidate explicitly declines from calendar (`No`).
 
 ## If Candidate Wants a Different Time
 If the candidate is not comfortable with offered slots:

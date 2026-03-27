@@ -69,6 +69,39 @@ Without this fallback, the pipeline would stop whenever Fireflies returned incom
 ## Final Note
 If more time is available, the integration direction remains **Fireflies API**. The next step is to harden extraction/matching so transcript URL and summary always come from real meeting output instead of fallback mock data.
 
+## 5A - AI Offer Letter Generation
+
+### Manager Input Collection (Implemented)
+Before generating the offer letter, manager decision intake captures:
+- confirmed job title and start date
+- base salary and compensation structure
+- equity/bonus (optional)
+- reporting manager
+- custom terms/conditions (optional)
+
+This is provided via manager selection details in the admin decision flow.
+
+### Generation Flow (Implemented)
+1. Manager marks candidate as `select` after interview completion.
+2. Backend validates required manager selection fields.
+3. Offer-letter generator builds prompt input using:
+   - `MANAGER_INPUT` JSON (manager-provided terms),
+   - `CANDIDATE_PROFILE` JSON (candidate profile, score, parse/research context).
+4. Prompt rules enforce: use only provided facts, no invented clauses, plain-text professional format.
+5. LLM returns a draft letter text.
+6. Draft is stored and converted to PDF, then persisted in storage with `offer_letter_created` status.
+7. Human review happens before send; manager approval endpoint is required to dispatch via e-sign/email flow.
+
+### Model/Prompt Notes
+- Uses Bedrock offer-letter prompt template (`offer_letter_prompt_template`).
+- Uses secondary model (`fallback_model_id`) with deterministic settings for cost control.
+- If LLM generator is unavailable, backend can fall back to deterministic template rendering.
+
+### Why this satisfies 5A
+- Manager questions are explicitly captured.
+- AI drafts a complete offer letter from manager input + candidate profile.
+- Output is routed through human approval before being sent.
+
 ## 5B - E-Signature Workflow
 
 ### Chosen Approach

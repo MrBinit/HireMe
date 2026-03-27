@@ -48,9 +48,7 @@ class SlackWelcomeService:
 
         selection = candidate.manager_selection_details
         role_title = (
-            selection.confirmed_job_title
-            if selection is not None
-            else candidate.role_selection
+            selection.confirmed_job_title if selection is not None else candidate.role_selection
         )
         start_date = selection.start_date.isoformat() if selection is not None else "Not specified"
         greeting_from_manager = (

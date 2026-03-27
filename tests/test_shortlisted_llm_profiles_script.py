@@ -126,7 +126,11 @@ def test_build_compact_storage_payload_keeps_portfolio_signals() -> None:
             "candidate_name": "Test Candidate",
             "role_selection": "Backend Engineer",
             "links_from_candidate_table": {"portfolio_url": "https://flowcv.me/test"},
-            "resume_snapshot": {"skills": ["Python"], "projects": ["HireMe"], "work_experience": []},
+            "resume_snapshot": {
+                "skills": ["Python"],
+                "projects": ["HireMe"],
+                "work_experience": [],
+            },
             "extractors": {
                 "linkedin": {},
                 "github": {},

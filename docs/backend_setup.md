@@ -1,9 +1,9 @@
 # HireMe Backend Setup
 
 ## Related Doc
-- DB/S3/SQS setup: `docs/db_setup.md`
-- Phase 02 implementation write-up: `docs/hiring_intelligence_pipeline.md`
-- Phase 03 calendar orchestration write-up: `docs/phase_03_calendar_orchestration.md`
+- DB/S3/SQS setup: `db_setup.md`
+- Phase 02 implementation write-up: `hiring_intelligence_pipeline.md`
+- Phase 03 calendar orchestration write-up: `phase_03_calendar_orchestration.md`
 
 ## Features implemented
 - Async FastAPI REST API for job openings and candidate applications.
@@ -40,7 +40,7 @@
 - UUID-based application records.
 - UUID-based job opening records.
 - Applicant record includes:
-  - submitted fields (`full_name`, `email`, optional `linkedin_url`, required `portfolio_url`, required `github_url`, optional `twitter_url`)
+  - submitted fields (`full_name`, `email`, required `linkedin_url`, optional `portfolio_url`, required `github_url`, optional `twitter_url`)
   - `role_selection`
   - `resume.storage_path` (S3 URI such as `s3://hireme-cv-bucket/hireme/resumes/<file>.pdf` when using S3 backend)
   - `parse_result` (single JSON column, default `null`) with:
@@ -266,7 +266,7 @@
   5) System does not wait for email replies to finalize booking; booking finalization is API-driven.
   6) Candidate may accept the invite directly in Google Calendar (`Yes`) after booking. Current implementation does not yet persist attendee `responseStatus` back into DB.
   7) Recommended follow-up: add calendar attendee response sync (polling or Google push watch) to mirror accept/decline in DB.
-  8) Expiry worker releases unconfirmed holds once `interview_hold_expires_at` passes (default 24h from option send).
+  8) Expiry worker releases unconfirmed holds once `interview_hold_expires_at` passes (default 48h from option send; configurable).
   9) Same expiry worker also syncs Fireflies transcripts for `interview_booked` rows when `scheduling.fireflies.enabled=true`.
   10) On transcript sync success, candidate row stores:
      - `interview_transcript_url`

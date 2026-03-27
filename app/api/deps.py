@@ -137,9 +137,7 @@ def get_parse_queue_publisher() -> ParseQueuePublisher:
     if runtime_config.parse.provider != "sqs":
         return NoopParseQueuePublisher()
     if not runtime_config.parse.queue_url:
-        raise RuntimeError(
-            "parse.queue_url is required when parse.use_queue=true and provider=sqs"
-        )
+        raise RuntimeError("parse.queue_url is required when parse.use_queue=true and provider=sqs")
 
     return SqsParseQueuePublisher(
         queue_url=runtime_config.parse.queue_url,
@@ -210,8 +208,7 @@ def get_scheduling_queue_publisher() -> SchedulingQueuePublisher:
         return NoopSchedulingQueuePublisher()
     if not scheduling.queue_url:
         raise RuntimeError(
-            "scheduling.queue_url is required when "
-            "scheduling.use_queue=true and provider=sqs"
+            "scheduling.queue_url is required when " "scheduling.use_queue=true and provider=sqs"
         )
 
     return SqsSchedulingQueuePublisher(

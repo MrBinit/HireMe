@@ -397,7 +397,9 @@ async def _analyze_repo(
         "stars": _safe_int(repo_payload.get("stargazers_count")),
         "forks": _safe_int(repo_payload.get("forks_count")),
         "language": repo_payload.get("language"),
-        "topics": repo_payload.get("topics") if isinstance(repo_payload.get("topics"), list) else [],
+        "topics": (
+            repo_payload.get("topics") if isinstance(repo_payload.get("topics"), list) else []
+        ),
         "pushed_at": repo_payload.get("pushed_at"),
         "updated_at": repo_payload.get("updated_at"),
         "readme_summary": readme_summary,
@@ -458,8 +460,7 @@ async def _run(
     )
     total_stars = sum(_safe_int(repo.get("stars")) for repo in analyzed)
     commits_window_total = sum(
-        _safe_int((repo.get("commit_activity") or {}).get("commits_in_window"))
-        for repo in analyzed
+        _safe_int((repo.get("commit_activity") or {}).get("commits_in_window")) for repo in analyzed
     )
 
     return {

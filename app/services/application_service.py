@@ -448,7 +448,9 @@ class ApplicationService:
 
         if decision == "select":
             if selection_details is None:
-                raise ApplicationValidationError("selection_details are required for decision=select")
+                raise ApplicationValidationError(
+                    "selection_details are required for decision=select"
+                )
             if self._offer_letter_service is not None:
                 rendered_template = await self._offer_letter_service.generate_offer_letter(
                     candidate=candidate,
@@ -521,7 +523,9 @@ class ApplicationService:
         if not candidate.offer_letter_storage_path:
             raise ApplicationValidationError("offer letter file is missing")
 
-        pdf_bytes = await self._read_offer_letter_pdf_from_storage(candidate.offer_letter_storage_path)
+        pdf_bytes = await self._read_offer_letter_pdf_from_storage(
+            candidate.offer_letter_storage_path
+        )
         now = datetime.now(tz=timezone.utc)
 
         if self._docusign_service is not None and self._docusign_service.enabled:
@@ -826,9 +830,7 @@ class ApplicationService:
         try:
             selection = candidate.manager_selection_details
             role_title = (
-                selection.confirmed_job_title
-                if selection is not None
-                else candidate.role_selection
+                selection.confirmed_job_title if selection is not None else candidate.role_selection
             )
             invite = await self._slack_service.invite_candidate(
                 candidate_email=str(candidate.email),
@@ -853,7 +855,10 @@ class ApplicationService:
                 application_id=candidate.id,
                 updates=updates,
             )
-            invite_link = self._config.slack_invite_fallback_join_url.strip() or "https://app.slack.com/client"
+            invite_link = (
+                self._config.slack_invite_fallback_join_url.strip()
+                or "https://app.slack.com/client"
+            )
             await self._send_slack_invite_link_email(
                 candidate=candidate,
                 invite_link=invite_link,
@@ -894,9 +899,9 @@ class ApplicationService:
                 application_id=candidate.id,
                 updates={
                     "slack_invite_status": invite_status,
-                    "slack_onboarding_status": "invite_action_required"
-                    if invite_status == "action_required"
-                    else "failed",
+                    "slack_onboarding_status": (
+                        "invite_action_required" if invite_status == "action_required" else "failed"
+                    ),
                     "slack_error": raw_error,
                     "note": invite_note,
                 },
@@ -970,11 +975,11 @@ class ApplicationService:
             )
             selection = candidate.manager_selection_details
             role_title = (
-                selection.confirmed_job_title
-                if selection is not None
-                else candidate.role_selection
+                selection.confirmed_job_title if selection is not None else candidate.role_selection
             )
-            start_date = selection.start_date.isoformat() if selection is not None else "Not specified"
+            start_date = (
+                selection.start_date.isoformat() if selection is not None else "Not specified"
+            )
             await self._slack_service.notify_hr_channel(
                 text=(
                     "Onboarding complete: "
@@ -1066,7 +1071,9 @@ class ApplicationService:
             with anyio.fail_after(self._notification_config.send_timeout_seconds):
                 await self._email_sender.send_offer_letter_to_candidate(payload)
         except (EmailSendError, TimeoutError) as exc:
-            logger.exception("failed to send offer letter email", extra={"application_id": str(candidate.id)})
+            logger.exception(
+                "failed to send offer letter email", extra={"application_id": str(candidate.id)}
+            )
             raise ApplicationValidationError("failed to send offer letter email") from exc
 
     async def _send_manager_rejection_email(self, *, candidate: ApplicationRecord) -> None:
@@ -1121,7 +1128,9 @@ class ApplicationService:
                 extra={"application_id": str(candidate.id)},
             )
             if self._notification_config.fail_submission_on_send_error:
-                raise ApplicationValidationError("failed to send signed-offer alert email") from None
+                raise ApplicationValidationError(
+                    "failed to send signed-offer alert email"
+                ) from None
 
     async def _send_slack_invite_link_email(
         self,
@@ -1226,7 +1235,9 @@ class ApplicationService:
 
         resolved_envelope_id = (envelope_id or candidate.docusign_envelope_id or "").strip()
         if not resolved_envelope_id:
-            raise ApplicationValidationError("DocuSign envelope id is missing for signed offer capture")
+            raise ApplicationValidationError(
+                "DocuSign envelope id is missing for signed offer capture"
+            )
         if self._docusign_service is None or not self._docusign_service.enabled:
             raise ApplicationValidationError("DocuSign is not configured")
         try:
@@ -1307,11 +1318,7 @@ class ApplicationService:
 
         def _escape_pdf_text(value: str) -> str:
             ascii_safe = value.encode("latin-1", "replace").decode("latin-1")
-            return (
-                ascii_safe.replace("\\", "\\\\")
-                .replace("(", "\\(")
-                .replace(")", "\\)")
-            )
+            return ascii_safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
         objects: dict[int, bytes] = {}
         objects[1] = b"<< /Type /Catalog /Pages 2 0 R >>"

@@ -89,9 +89,7 @@ class DocusignService:
     def enabled(self) -> bool:
         """Return True when DocuSign is configured and ready to call."""
 
-        has_oauth_credentials = bool(
-            self._integration_key and self._user_id and self._private_key
-        )
+        has_oauth_credentials = bool(self._integration_key and self._user_id and self._private_key)
         return bool(
             self._config.enabled
             and (self._access_token or has_oauth_credentials)
@@ -266,7 +264,9 @@ class DocusignService:
             async with httpx.AsyncClient(timeout=self._config.send_timeout_seconds) as client:
                 response = await client.get(endpoint, headers=headers)
         except Exception as exc:  # pragma: no cover - network/runtime failure
-            raise DocusignApiError(f"failed to download DocuSign envelope documents: {exc}") from exc
+            raise DocusignApiError(
+                f"failed to download DocuSign envelope documents: {exc}"
+            ) from exc
 
         if response.status_code >= 400:
             body = self._safe_json(response)
@@ -276,7 +276,9 @@ class DocusignService:
             )
         if not response.content:
             raise DocusignApiError("DocuSign envelope document download returned empty payload")
-        return DocusignEnvelopeDocument(envelope_id=normalized_id, pdf_bytes=bytes(response.content))
+        return DocusignEnvelopeDocument(
+            envelope_id=normalized_id, pdf_bytes=bytes(response.content)
+        )
 
     def parse_webhook_event(
         self,
@@ -396,9 +398,7 @@ class DocusignService:
 
         aud = urlsplit(self._config.oauth_base_uri.strip()).netloc
         if not aud:
-            aud = self._config.oauth_base_uri.strip().replace("https://", "").replace(
-                "http://", ""
-            )
+            aud = self._config.oauth_base_uri.strip().replace("https://", "").replace("http://", "")
         claims = {
             "iss": self._integration_key,
             "sub": self._user_id,

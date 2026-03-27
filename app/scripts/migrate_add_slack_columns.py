@@ -76,4 +76,3 @@ if __name__ == "__main__":
     from app.scripts.error import run_script_entrypoint
 
     raise SystemExit(run_script_entrypoint(main))
-

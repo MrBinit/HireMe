@@ -183,7 +183,9 @@ def _build_resume_snapshot(parse_result: dict[str, Any] | None) -> dict[str, Any
     if isinstance(projects, list):
         project_values.extend(str(item).strip() for item in projects if isinstance(item, str))
     if isinstance(key_achievements, list):
-        project_values.extend(str(item).strip() for item in key_achievements if isinstance(item, str))
+        project_values.extend(
+            str(item).strip() for item in key_achievements if isinstance(item, str)
+        )
 
     return {
         "skills": parse_result.get("skills"),
@@ -221,7 +223,9 @@ def _resume_signal_lists(parse_result: dict[str, Any] | None) -> dict[str, list[
     }
 
 
-def _match_items_against_corpus(items: list[str], corpus: str, *, max_items: int) -> tuple[list[str], list[str]]:
+def _match_items_against_corpus(
+    items: list[str], corpus: str, *, max_items: int
+) -> tuple[list[str], list[str]]:
     """Match list values against normalized text corpus."""
 
     matched: list[str] = []
@@ -401,9 +405,7 @@ def _build_issue_flags(
     skill_differences.extend(
         _coerce_text_list(linkedin_check.get("unmatched_skills"), max_items=20)
     )
-    skill_differences.extend(
-        _coerce_text_list(github_check.get("unmatched_skills"), max_items=20)
-    )
+    skill_differences.extend(_coerce_text_list(github_check.get("unmatched_skills"), max_items=20))
     merged_skills = list(dict.fromkeys(skill_differences))
     if merged_skills:
         flags.append(
@@ -538,7 +540,9 @@ def _build_fallback_strengths_and_risks(
             "Public profile evidence supports skills: " + ", ".join(matched_skills[:5]) + "."
         )
     if github_repo_names:
-        strengths.append("GitHub shows shipped repositories: " + ", ".join(github_repo_names[:4]) + ".")
+        strengths.append(
+            "GitHub shows shipped repositories: " + ", ".join(github_repo_names[:4]) + "."
+        )
 
     for flag in issue_flags:
         flag_type = flag.get("type")
@@ -550,7 +554,9 @@ def _build_fallback_strengths_and_risks(
             risks.append("Some resume skills were not corroborated on LinkedIn/GitHub.")
 
     if not strengths:
-        strengths.append("Public profile signal is limited but candidate submitted complete resume data.")
+        strengths.append(
+            "Public profile signal is limited but candidate submitted complete resume data."
+        )
     if not risks:
         risks.append("No major discrepancies were detected from available public evidence.")
 
@@ -740,7 +746,11 @@ def _normalize_llm_analysis(
         or fallback_strengths,
         "risks": _coerce_text_list(parsed_payload.get("risks"), max_items=8) or fallback_risks,
         "summary": _normalize_brief_text(
-            text=parsed_payload.get("summary") if isinstance(parsed_payload.get("summary"), str) else None,
+            text=(
+                parsed_payload.get("summary")
+                if isinstance(parsed_payload.get("summary"), str)
+                else None
+            ),
             min_sentences=config.enrichment.min_brief_sentences,
             max_sentences=config.enrichment.max_brief_sentences,
             fallback_text=fallback_brief,
@@ -980,7 +990,9 @@ def _build_compact_storage_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "cross_checks": {
             "resume_vs_linkedin": {
                 "matched_skills": _coerce_text_list(check_li.get("matched_skills"), max_items=8),
-                "unmatched_skills": _coerce_text_list(check_li.get("unmatched_skills"), max_items=8),
+                "unmatched_skills": _coerce_text_list(
+                    check_li.get("unmatched_skills"), max_items=8
+                ),
                 "matched_employers": _coerce_text_list(
                     check_li.get("matched_employers"),
                     max_items=5,
@@ -1002,9 +1014,15 @@ def _build_compact_storage_payload(payload: dict[str, Any]) -> dict[str, Any]:
             },
             "resume_vs_github": {
                 "matched_skills": _coerce_text_list(check_gh.get("matched_skills"), max_items=8),
-                "unmatched_skills": _coerce_text_list(check_gh.get("unmatched_skills"), max_items=8),
-                "matched_projects": _coerce_text_list(check_gh.get("matched_projects"), max_items=6),
-                "missing_projects": _coerce_text_list(check_gh.get("missing_projects"), max_items=6),
+                "unmatched_skills": _coerce_text_list(
+                    check_gh.get("unmatched_skills"), max_items=8
+                ),
+                "matched_projects": _coerce_text_list(
+                    check_gh.get("matched_projects"), max_items=6
+                ),
+                "missing_projects": _coerce_text_list(
+                    check_gh.get("missing_projects"), max_items=6
+                ),
                 "top_repo_names": _coerce_text_list(check_gh.get("top_repo_names"), max_items=5),
                 "skill_differences": bool(check_gh.get("skill_differences")),
                 "missing_projects_flag": bool(check_gh.get("missing_projects_flag")),
@@ -1071,7 +1089,9 @@ def _serialize_compact_payload_with_limit(payload: dict[str, Any], *, max_chars:
     resume_snapshot = candidate.get("resume_snapshot")
     if isinstance(resume_snapshot, dict):
         resume_snapshot["skills"] = _coerce_text_list(resume_snapshot.get("skills"), max_items=10)
-        resume_snapshot["projects"] = _coerce_text_list(resume_snapshot.get("projects"), max_items=6)
+        resume_snapshot["projects"] = _coerce_text_list(
+            resume_snapshot.get("projects"), max_items=6
+        )
         work = resume_snapshot.get("work_experience")
         if isinstance(work, list):
             resume_snapshot["work_experience"] = work[:3]
@@ -1097,7 +1117,9 @@ def _serialize_compact_payload_with_limit(payload: dict[str, Any], *, max_chars:
                 github["top_repositories"] = trimmed
         linkedin = extractors.get("linkedin")
         if isinstance(linkedin, dict):
-            linkedin["skills_unmatched"] = _coerce_text_list(linkedin.get("skills_unmatched"), max_items=8)
+            linkedin["skills_unmatched"] = _coerce_text_list(
+                linkedin.get("skills_unmatched"), max_items=8
+            )
             linkedin["unmatched_employers"] = _coerce_text_list(
                 linkedin.get("unmatched_employers"),
                 max_items=5,
@@ -1132,13 +1154,17 @@ def _serialize_compact_payload_with_limit(payload: dict[str, Any], *, max_chars:
         return serialized
 
     # Final pass: keep schema with aggressively compacted sections.
-    extractors = candidate.get("extractors") if isinstance(candidate.get("extractors"), dict) else {}
+    extractors = (
+        candidate.get("extractors") if isinstance(candidate.get("extractors"), dict) else {}
+    )
     linkedin = extractors.get("linkedin") if isinstance(extractors.get("linkedin"), dict) else {}
     github = extractors.get("github") if isinstance(extractors.get("github"), dict) else {}
     twitter = extractors.get("twitter") if isinstance(extractors.get("twitter"), dict) else {}
     portfolio = extractors.get("portfolio") if isinstance(extractors.get("portfolio"), dict) else {}
 
-    github_repos = github.get("top_repositories") if isinstance(github.get("top_repositories"), list) else []
+    github_repos = (
+        github.get("top_repositories") if isinstance(github.get("top_repositories"), list) else []
+    )
     compact_repos: list[dict[str, Any]] = []
     for repo in github_repos[:2]:
         if not isinstance(repo, dict):
@@ -1151,7 +1177,9 @@ def _serialize_compact_payload_with_limit(payload: dict[str, Any], *, max_chars:
             }
         )
 
-    cross_checks = candidate.get("cross_checks") if isinstance(candidate.get("cross_checks"), dict) else {}
+    cross_checks = (
+        candidate.get("cross_checks") if isinstance(candidate.get("cross_checks"), dict) else {}
+    )
     cross_li = (
         cross_checks.get("resume_vs_linkedin")
         if isinstance(cross_checks.get("resume_vs_linkedin"), dict)
@@ -1199,7 +1227,9 @@ def _serialize_compact_payload_with_limit(payload: dict[str, Any], *, max_chars:
         "extractors": {
             "linkedin": {
                 "matched_profile_url": linkedin.get("matched_profile_url"),
-                "skills_unmatched": _coerce_text_list(linkedin.get("skills_unmatched"), max_items=2),
+                "skills_unmatched": _coerce_text_list(
+                    linkedin.get("skills_unmatched"), max_items=2
+                ),
                 "unmatched_employers": _coerce_text_list(
                     linkedin.get("unmatched_employers"),
                     max_items=2,
@@ -1234,13 +1264,19 @@ def _serialize_compact_payload_with_limit(payload: dict[str, Any], *, max_chars:
                     cross_li.get("unmatched_employers"),
                     max_items=2,
                 ),
-                "unmatched_skills": _coerce_text_list(cross_li.get("unmatched_skills"), max_items=2),
+                "unmatched_skills": _coerce_text_list(
+                    cross_li.get("unmatched_skills"), max_items=2
+                ),
             },
             "resume_vs_github": {
                 "missing_projects_flag": bool(cross_gh.get("missing_projects_flag")),
                 "skill_differences": bool(cross_gh.get("skill_differences")),
-                "missing_projects": _coerce_text_list(cross_gh.get("missing_projects"), max_items=2),
-                "unmatched_skills": _coerce_text_list(cross_gh.get("unmatched_skills"), max_items=2),
+                "missing_projects": _coerce_text_list(
+                    cross_gh.get("missing_projects"), max_items=2
+                ),
+                "unmatched_skills": _coerce_text_list(
+                    cross_gh.get("unmatched_skills"), max_items=2
+                ),
             },
         },
         "issue_flags": compact_issue_flags,

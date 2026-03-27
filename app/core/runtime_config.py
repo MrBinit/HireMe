@@ -912,11 +912,15 @@ def get_runtime_config() -> RuntimeConfig:
     prompt_config_path = settings.prompt_config_path
     template_config_path = settings.template_config_path
 
-    raw_api_platform_config = copy.deepcopy(_load_yaml_file(str(api_platform_config_path.resolve())))
+    raw_api_platform_config = copy.deepcopy(
+        _load_yaml_file(str(api_platform_config_path.resolve()))
+    )
     raw_application_config = copy.deepcopy(_load_yaml_file(str(application_config_path.resolve())))
     raw_database_config = copy.deepcopy(_load_yaml_file(str(database_config_path.resolve())))
     raw_parse_config = copy.deepcopy(_load_yaml_file(str(parse_config_path.resolve())))
-    raw_notification_config = copy.deepcopy(_load_yaml_file(str(notification_config_path.resolve())))
+    raw_notification_config = copy.deepcopy(
+        _load_yaml_file(str(notification_config_path.resolve()))
+    )
     raw_google_api_config = copy.deepcopy(_load_yaml_file(str(google_api_config_path.resolve())))
     raw_s3_config = copy.deepcopy(_load_yaml_file(str(s3_config_path.resolve())))
     raw_bedrock_config = copy.deepcopy(_load_yaml_file(str(bedrock_config_path.resolve())))
@@ -968,6 +972,8 @@ def get_runtime_config() -> RuntimeConfig:
         )
 
     combined_config = _merge_dicts(combined_config, _unwrap_overlay(raw_prompt_config, "prompts"))
-    combined_config = _merge_dicts(combined_config, _unwrap_overlay(raw_template_config, "templates"))
+    combined_config = _merge_dicts(
+        combined_config, _unwrap_overlay(raw_template_config, "templates")
+    )
 
     return RuntimeConfig.model_validate(combined_config)

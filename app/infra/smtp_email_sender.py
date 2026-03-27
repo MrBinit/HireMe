@@ -90,7 +90,9 @@ class SmtpEmailSender(EmailSender):
         self._interview_reschedule_options_subject_template = (
             interview_reschedule_options_subject_template
         )
-        self._interview_reschedule_options_body_template = interview_reschedule_options_body_template
+        self._interview_reschedule_options_body_template = (
+            interview_reschedule_options_body_template
+        )
         self._offer_letter_subject_template = offer_letter_subject_template
         self._offer_letter_body_template = offer_letter_body_template
         self._manager_rejection_subject_template = manager_rejection_subject_template
@@ -452,7 +454,7 @@ class SmtpEmailSender(EmailSender):
             option_rows = "".join(
                 (
                     f"<li>{escape(label)} | "
-                    f"<a href=\"{escape(link, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">"
+                    f'<a href="{escape(link, quote=True)}" target="_blank" rel="noreferrer">'
                     "Click here"
                     "</a></li>"
                 )
@@ -463,7 +465,7 @@ class SmtpEmailSender(EmailSender):
         action_rows = "".join(
             (
                 "<li>"
-                f"<a href=\"{escape(link, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">"
+                f'<a href="{escape(link, quote=True)}" target="_blank" rel="noreferrer">'
                 f"{escape(label)}"
                 "</a>"
                 "</li>"
@@ -472,8 +474,7 @@ class SmtpEmailSender(EmailSender):
             if link
         )
         action_block = (
-            "<p>If these options do not work for you:</p>"
-            f"<ul>{action_rows}</ul>"
+            "<p>If these options do not work for you:</p>" f"<ul>{action_rows}</ul>"
             if action_rows
             else ""
         )
@@ -493,8 +494,7 @@ class SmtpEmailSender(EmailSender):
         if "{action_links}" in body_template:
             return body_template
         return (
-            body_template.rstrip()
-            + "\n\nIf these options do not work for you:\n{action_links}\n"
+            body_template.rstrip() + "\n\nIf these options do not work for you:\n{action_links}\n"
         )
 
     @staticmethod
@@ -527,7 +527,7 @@ class SmtpEmailSender(EmailSender):
 
         action_items = "".join(
             (
-                f"<li><a href=\"{escape(link, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">"
+                f'<li><a href="{escape(link, quote=True)}" target="_blank" rel="noreferrer">'
                 f"{escape(label)}"
                 "</a></li>"
             )
@@ -550,7 +550,7 @@ class SmtpEmailSender(EmailSender):
         option_rows = "".join(
             (
                 f"<li>{escape(label)} | "
-                f"<a href=\"{escape(link, quote=True)}\" target=\"_blank\" rel=\"noreferrer\">"
+                f'<a href="{escape(link, quote=True)}" target="_blank" rel="noreferrer">'
                 "Accept"
                 "</a></li>"
             )
@@ -558,8 +558,8 @@ class SmtpEmailSender(EmailSender):
             if link
         )
         reject_html = (
-            f"<p>If none work, <a href=\"{escape(payload.reject_link, quote=True)}\" "
-            "target=\"_blank\" rel=\"noreferrer\">Reject and send new options</a>.</p>"
+            f'<p>If none work, <a href="{escape(payload.reject_link, quote=True)}" '
+            'target="_blank" rel="noreferrer">Reject and send new options</a>.</p>'
             if payload.reject_link
             else ""
         )

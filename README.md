@@ -12,6 +12,11 @@ This project includes:
 - Offer-letter e-signature flow with DocuSign
 - Post-signature Slack onboarding automation with AI-personalized welcome message
 
+## Mock Data and Privacy Compliance
+- This prototype uses test/dummy candidate records and test integration accounts.
+- No production or real candidate PII should be used for demo/submission runs.
+- Any mocked outputs (for example fallback transcript summaries) are explicitly documented.
+
 ## Tech Stack
 - Backend: FastAPI (Python)
 - Frontend: Next.js
@@ -84,7 +89,8 @@ This project includes:
 - All offered slots are held immediately to prevent conflicts.
 - On candidate confirmation, one slot is finalized and others are released.
 - Candidate can accept directly in Google Calendar (`Yes`) without replying to email.
-- If candidate declines in Google Calendar (`No`), interview should be canceled and moved to cancellation/reschedule handling.
+- Current implementation does not depend on email replies to finalize booking.
+- Automatic calendar attendee-decline sync (`No` -> auto-cancel/reschedule) is a planned hardening step; current flow supports explicit cancel/reschedule actions.
 
 4. Offer + onboarding:
 - Offer letter is generated and sent via DocuSign.
@@ -126,6 +132,13 @@ This project intentionally made trade-offs to deliver a working end-to-end syste
 - Trade-off:
   - Some long-tail evidence is dropped, which can reduce context depth.
 
+## Mocked / Degraded Integrations (Transparency)
+| Integration | Current State | Why | Production Plan |
+| --- | --- | --- | --- |
+| Fireflies transcript retrieval | Real integration with fallback/mock summary when transcript payload is incomplete | Avoid blocking interview pipeline on unreliable transcript fields | Webhook-first transcript ID matching + stronger retries + strict real-transcript completion |
+| X/Twitter enrichment in shortlist pipeline | Best-effort extraction with safe fallback payloads when handle confidence/data is weak | Avoid false profile attribution and noisy unsupported claims | Stronger identity confidence scoring and evidence-grounded extraction |
+| Slack admin invite in restricted workspaces | API invite may fail on token limitations; fallback invite-link email is used | Keep onboarding unblocked without enterprise admin token guarantees | Workspace-admin token hardening + deterministic invite API success path |
+
 ## Known Limitations
 - LLM score is not perfectly consistent run-to-run.
 - LLM dependencies can introduce hallucination risk when external evidence is noisy.
@@ -134,6 +147,14 @@ This project intentionally made trade-offs to deliver a working end-to-end syste
 - Proper backpressure controls are not fully implemented across all queue + LLM paths.
 - A robust LLM circuit-breaker strategy is not fully implemented yet.
 - Full load testing/performance characterization has not been completed yet.
+
+## Requirement Deviations and Rationale
+| Requirement Area | Current Behavior | Rationale / Note |
+| --- | --- | --- |
+| Resume file types | `.pdf`, `.docx`, and `.doc` currently accepted | `.doc` retained for backward compatibility; can be disabled for strict PDF/DOCX-only policy |
+| Portfolio/GitHub optionality | `github_url` is currently required in request schema | Implementation simplification; should be relaxed to optional to exactly match brief |
+| Calendar attendee response sync | Booking finalizes at confirmation API time; attendee `responseStatus` sync is not fully automated | Core scheduling is stable; attendee accept/decline sync is planned hardening |
+| Reminder/expiry timing | 24-hour reminder with 48-hour hold expiry | Chosen to nudge early while still enforcing 48-hour slot release window |
 
 ## What I Would Improve With More Time
 1. AI scoring and evaluation reliability:
@@ -212,6 +233,16 @@ If extended further, I would add:
 - a script to run batch scoring and summarization evaluations,
 - regression reporting for prompt/model changes,
 - confidence-based routing or human-review escalation when evidence quality is weak.
+
+## Submission Checklist
+- Replace placeholders before final submission email.
+- Working prototype:
+  - Local run supported via backend + frontend startup commands in docs
+  - Deployed URL: `<add-url>`
+- Loom walkthrough (10-15 min): `<add-loom-link>`
+- GitHub repository link: `<add-repo-link>`
+- Edge-case documentation: `docs/edge_case_documentation.md`
+- Assumptions/trade-offs documentation: `docs/assumptions_and_tradeoffs.md`
 
 ## Documentation Index
 - [docs/candidate_career_page_implementation.md](docs/candidate_career_page_implementation.md)

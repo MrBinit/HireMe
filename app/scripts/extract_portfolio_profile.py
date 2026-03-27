@@ -99,7 +99,8 @@ def _pick_primary_hits(
     prefixed_hits = [
         hit
         for hit in hits
-        if isinstance(hit.get("link"), str) and _normalize_url(hit["link"]).casefold().startswith(target_url)
+        if isinstance(hit.get("link"), str)
+        and _normalize_url(hit["link"]).casefold().startswith(target_url)
     ]
     if prefixed_hits:
         return prefixed_hits[:max_items], prefixed_hits[0].get("link")

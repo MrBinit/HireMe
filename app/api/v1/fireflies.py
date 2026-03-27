@@ -176,7 +176,9 @@ async def fireflies_webhook_callback(
 
     runtime_config = get_runtime_config()
     if runtime_config.scheduling.fireflies.update_schedule_status_on_complete:
-        updates["interview_schedule_status"] = runtime_config.scheduling.fireflies.completed_schedule_status
+        updates["interview_schedule_status"] = (
+            runtime_config.scheduling.fireflies.completed_schedule_status
+        )
 
     updated = await service.update_admin_review(
         application_id=candidate.id,

@@ -60,19 +60,10 @@ class SlackService:
         """Return True when Slack workflow is configured and enabled."""
 
         has_bot_auth = bool(self._bot_token) or self._can_refresh("bot")
-        has_invite_auth = (
-            bool(self._admin_user_token)
-            or self._can_refresh("admin")
-            or has_bot_auth
-        )
-        has_signature_config = bool(
-            not self._config.verify_event_signature or self._signing_secret
-        )
+        has_invite_auth = bool(self._admin_user_token) or self._can_refresh("admin") or has_bot_auth
+        has_signature_config = bool(not self._config.verify_event_signature or self._signing_secret)
         return bool(
-            self._config.enabled
-            and has_bot_auth
-            and has_invite_auth
-            and has_signature_config
+            self._config.enabled and has_bot_auth and has_invite_auth and has_signature_config
         )
 
     @property
@@ -222,10 +213,7 @@ class SlackService:
         legacy_error = str(legacy_response.get("error") or "")
         if legacy_error in {"already_invited", "already_in_team", "already_in_workspace"}:
             return SlackInviteResult(status=legacy_error)
-        if (
-            admin_error == "not_allowed_token_type"
-            or legacy_error == "not_allowed_token_type"
-        ):
+        if admin_error == "not_allowed_token_type" or legacy_error == "not_allowed_token_type":
             raise SlackApiError(
                 "Slack token type is not allowed for invite API. "
                 "Use a workspace admin user token in SLACK_ADMIN_USER_TOKEN."
@@ -348,9 +336,7 @@ class SlackService:
         """Return active access token, refreshing when needed and configured."""
 
         current = (
-            self._bot_token
-            if token_kind == "bot"
-            else (self._admin_user_token or self._bot_token)
+            self._bot_token if token_kind == "bot" else (self._admin_user_token or self._bot_token)
         )
         if current:
             return current
@@ -407,9 +393,7 @@ class SlackService:
             if not isinstance(body, dict):
                 raise SlackApiError("Slack OAuth response is not a JSON object")
             if body.get("ok") is not True:
-                raise SlackApiError(
-                    f"Slack OAuth refresh failed: {body.get('error') or 'unknown'}"
-                )
+                raise SlackApiError(f"Slack OAuth refresh failed: {body.get('error') or 'unknown'}")
 
             access_token = str(body.get("access_token") or "").strip()
             if not access_token:

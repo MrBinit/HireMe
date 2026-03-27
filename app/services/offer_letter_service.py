@@ -70,7 +70,9 @@ class OfferLetterService:
             "ai_screening_summary": candidate.ai_screening_summary,
             "candidate_brief": candidate.candidate_brief,
             "online_research_summary": candidate.online_research_summary,
-            "parse_result": candidate.parse_result if isinstance(candidate.parse_result, dict) else {},
+            "parse_result": (
+                candidate.parse_result if isinstance(candidate.parse_result, dict) else {}
+            ),
         }
         candidate_profile_json = json.dumps(candidate_profile_payload, ensure_ascii=True)
         candidate_profile_json = self._clip(

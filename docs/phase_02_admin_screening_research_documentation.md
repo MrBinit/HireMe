@@ -318,7 +318,35 @@ Stored fields:
   - issue flag normalization
   - strengths/risks + 3-5 sentence manager brief
 
-## 8) Limitations and Improvement Plan
+## 8) Evaluation Prompt (Planned, not fully implemented)
+Due to time constraints, a dedicated offline evaluation stage is documented but not fully implemented in code yet.
+
+### Why this is needed
+- AI score can vary across runs for borderline candidates.
+- Noisy social/profile evidence can increase hallucination risk.
+- Hiring decisions need traceable quality checks, not only runtime prompts.
+
+### Planned evaluation prompt design
+Evaluator model input:
+- candidate parsed payload
+- target JD
+- model score output (`score`, `breakdown`, `reason`)
+- optional human label (`reject` / `borderline` / `shortlist`)
+
+Planned evaluator prompt objective:
+- check scoring consistency and rubric adherence
+- check evidence grounding of rationale
+- flag potential bias-sensitive reasoning patterns
+- produce machine-readable evaluation JSON
+
+Planned output contract:
+- `agreement_with_label` (0-1)
+- `score_variance_risk` (`low`/`medium`/`high`)
+- `grounding_issues` (list)
+- `bias_risk_flags` (list)
+- `evaluator_note` (short summary)
+
+## 9) Limitations and Improvement Plan
 
 ### Current limitations
 - Twitter identity resolution is high risk with name-only search.

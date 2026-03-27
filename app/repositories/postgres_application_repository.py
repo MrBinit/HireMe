@@ -312,13 +312,17 @@ class PostgresApplicationRepository(ApplicationRepository):
             if "manager_selection_details" in updates:
                 entity.manager_selection_details = updates["manager_selection_details"]
             if "manager_selection_template_output" in updates:
-                entity.manager_selection_template_output = updates["manager_selection_template_output"]
+                entity.manager_selection_template_output = updates[
+                    "manager_selection_template_output"
+                ]
             if "offer_letter_status" in updates:
                 entity.offer_letter_status = updates["offer_letter_status"]
             if "offer_letter_storage_path" in updates:
                 entity.offer_letter_storage_path = updates["offer_letter_storage_path"]
             if "offer_letter_signed_storage_path" in updates:
-                entity.offer_letter_signed_storage_path = updates["offer_letter_signed_storage_path"]
+                entity.offer_letter_signed_storage_path = updates[
+                    "offer_letter_signed_storage_path"
+                ]
             if "offer_letter_generated_at" in updates:
                 entity.offer_letter_generated_at = updates["offer_letter_generated_at"]
             if "offer_letter_sent_at" in updates:

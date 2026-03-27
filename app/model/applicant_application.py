@@ -113,14 +113,18 @@ class ApplicantApplication(Base):
     offer_letter_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     docusign_envelope_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     slack_invite_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    slack_invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    slack_invited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     slack_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     slack_joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     slack_welcome_message: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     slack_welcome_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    slack_onboarding_status: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    slack_onboarding_status: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     slack_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     status_history: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
     parse_status: Mapped[str] = mapped_column(

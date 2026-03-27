@@ -56,7 +56,9 @@ class AdminAuthService:
         submitted_username = payload.username.strip()
 
         if not expected_username:
-            raise AdminAuthConfigurationError(f"{self._auth_label.upper()}_USERNAME is not configured")
+            raise AdminAuthConfigurationError(
+                f"{self._auth_label.upper()}_USERNAME is not configured"
+            )
         if not self._jwt_secret:
             raise AdminAuthConfigurationError("ADMIN_JWT_SECRET is not configured")
         if not (self._admin_password_hash or self._admin_password):

@@ -182,7 +182,9 @@ class _FakeDocusignService:
         if token != self.webhook_token:
             raise ApplicationValidationError("invalid DocuSign webhook token")
 
-    def parse_webhook_event(self, *, raw_body: bytes, content_type: str | None) -> DocusignWebhookEvent:
+    def parse_webhook_event(
+        self, *, raw_body: bytes, content_type: str | None
+    ) -> DocusignWebhookEvent:
         _ = (raw_body, content_type)
         return self.next_event
 
@@ -310,7 +312,7 @@ def _build_service(
                 "We look forward to welcoming you to HireMe.\n\n"
                 "Sincerely,\n"
                 "HireMe Hiring Team\n"
-            )
+            ),
         ),
         resume_storage=LocalResumeStorage(tmp_path / "resumes"),
         parse_config=ParseRuntimeConfig(use_queue=use_queue),
@@ -929,7 +931,9 @@ def test_prefilter_can_show_candidates_outside_experience_range(tmp_path: Path) 
     asyncio.run(run())
 
 
-def test_manager_select_decision_requires_interview_done_and_creates_offer_letter(tmp_path: Path) -> None:
+def test_manager_select_decision_requires_interview_done_and_creates_offer_letter(
+    tmp_path: Path,
+) -> None:
     """Manager select should generate PDF + storage path and set created status."""
 
     async def run() -> None:
@@ -982,7 +986,10 @@ def test_manager_select_decision_requires_interview_done_and_creates_offer_lette
         assert updated.manager_selection_details.confirmed_job_title == "Senior Backend Engineer"
         assert isinstance(updated.manager_selection_template_output, str)
         assert "Dear Decision User," in updated.manager_selection_template_output
-        assert "position of Senior Backend Engineer at HireMe" in updated.manager_selection_template_output
+        assert (
+            "position of Senior Backend Engineer at HireMe"
+            in updated.manager_selection_template_output
+        )
         assert "base salary of USD 150,000" in updated.manager_selection_template_output
         assert updated.rejection_reason is None
 
@@ -1068,7 +1075,9 @@ def test_manager_reject_sends_candidate_email_when_notifications_enabled(tmp_pat
         assert updated is not None
         assert updated.applicant_status == "rejected"
         assert len(email_sender.manager_rejection_payloads) == 1
-        assert email_sender.manager_rejection_payloads[0].candidate_email == "reject-mail@example.com"
+        assert (
+            email_sender.manager_rejection_payloads[0].candidate_email == "reject-mail@example.com"
+        )
 
     asyncio.run(run())
 
@@ -1491,7 +1500,9 @@ def test_docusign_signed_event_marks_onboarded_when_already_in_workspace(tmp_pat
     async def run() -> None:
         fake_offer_service = _FakeOfferLetterService()
         fake_docusign = _FakeDocusignService(webhook_token="hook-secret")
-        fake_slack = _FakeSlackService(invite_status="already_in_workspace", invite_user_id="U42EXIST")
+        fake_slack = _FakeSlackService(
+            invite_status="already_in_workspace", invite_user_id="U42EXIST"
+        )
         email_sender = _CaptureEmailSender()
         job_service, app_service = _build_service(
             tmp_path,
