@@ -2,8 +2,8 @@
 
 HireMe is an end-to-end hiring workflow that moves a candidate from application submission to interview scheduling, offer signature, and Slack onboarding.
 
-## =Overview
-- See `overview.md` for a concise component-by-component summary.
+## Overview
+- See `docs/overview.md` for a concise component-by-component summary.
 
 ## Project Summary
 This project includes:
@@ -200,7 +200,7 @@ Remaining recommendation:
 | Requirement Area | Current Behavior | Rationale / Note |
 | --- | --- | --- |
 | Resume file types | `.pdf`, `.docx`, and `.doc` currently accepted | `.doc` retained for backward compatibility; can be disabled for strict PDF/DOCX-only policy |
-| Portfolio/GitHub optionality | `github_url` is currently required in request schema | Implementation simplification; should be relaxed to optional to exactly match brief |
+| Portfolio/GitHub optionality | `portfolio_url` and `github_url` are optional in application form/payload | Aligned with assignment brief |
 | Calendar attendee response sync | Booking finalizes at confirmation API time; attendee `responseStatus` sync is not fully automated | Core scheduling is stable; attendee accept/decline sync is planned hardening |
 | Reminder/expiry timing | 24-hour reminder with 48-hour hold expiry | Chosen to nudge early while still enforcing 48-hour slot release window |
 
