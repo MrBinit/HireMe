@@ -275,6 +275,12 @@ class ApplicationService:
         except DuplicateApplicationError as exc:
             raise ApplicationValidationError(self._config.duplicate_application_message) from exc
 
+        if send_confirmation_email:
+            await self._send_application_confirmation_email(
+                candidate=created,
+                fail_on_error=self._notification_config.fail_submission_on_send_error,
+            )
+
         if self._parse_config.use_queue:
             parse_job = ResumeParseJob(
                 application_id=created.id,
@@ -296,12 +302,6 @@ class ApplicationService:
                     raise ApplicationValidationError(
                         "application submission failed to queue for parsing"
                     ) from None
-
-        if send_confirmation_email:
-            await self._send_application_confirmation_email(
-                candidate=created,
-                fail_on_error=self._notification_config.fail_submission_on_send_error,
-            )
 
         return created
 

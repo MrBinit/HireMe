@@ -24,13 +24,25 @@ Run FastAPI on `http://127.0.0.1:8000` (or update `NEXT_PUBLIC_API_BASE_URL`).
 
 ## Deployment
 
-Set `NEXT_PUBLIC_API_BASE_URL` in your frontend deployment environment to your backend public URL.
+This frontend is configured for static export (`next.config.mjs -> output: "export"`), so deploy the generated `frontend/out/` folder.
+
+Set `NEXT_PUBLIC_API_BASE_URL` in your production build environment to your backend public URL.
 
 Example:
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=https://api.hireme.com
 ```
+
+Production-ready build command:
+
+```bash
+cd frontend
+npm ci
+NEXT_PUBLIC_API_BASE_URL=https://api.hireme.com npm run deploy:ready
+```
+
+After success, upload/sync contents of `frontend/out/` to your static host (S3/CloudFront, Netlify static upload, etc.).
 
 Notes:
 - If `NEXT_PUBLIC_API_BASE_URL` is not set in production, frontend uses same-origin requests.

@@ -118,7 +118,7 @@ export default function CandidateApplyPage() {
       form.reset();
       setSubmitState({
         type: "success",
-        message: "Application submitted successfully.",
+        message: "Thank you for your application. We have received it successfully.",
       });
     } catch (error) {
       setSubmitState({

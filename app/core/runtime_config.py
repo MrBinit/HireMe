@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -556,7 +557,7 @@ class SchedulingRuntimeConfig(BaseModel):
     receive_wait_seconds: int = 20
     visibility_timeout_seconds: int = 300
     max_receive_count: int = 5
-    auto_enqueue_after_shortlist: bool = True
+    auto_enqueue_after_shortlist: bool = False
     target_statuses: list[str] = Field(default_factory=lambda: ["shortlisted"])
     min_slots: int = 3
     max_slots: int = 5
@@ -929,6 +930,69 @@ def _load_yaml_file(path_str: str) -> dict[str, Any]:
     return payload
 
 
+def _is_localhost_like_host(host: str) -> bool:
+    """Return True when a host points to local development endpoints."""
+
+    normalized = host.strip().lower()
+    if not normalized:
+        return False
+    return normalized in {"localhost", "127.0.0.1", "0.0.0.0"} or normalized.endswith(".local")
+
+
+def _is_localhost_like_url(url: str) -> bool:
+    """Return True when a URL targets local development endpoints."""
+
+    parsed = urlparse(url.strip())
+    return _is_localhost_like_host(parsed.hostname or "")
+
+
+def _derive_public_frontend_base_url(*, allow_origins: list[str]) -> str | None:
+    """Pick one public frontend origin from CORS allow-origins for email links."""
+
+    cloudfront_https: str | None = None
+    any_https: str | None = None
+    any_http: str | None = None
+
+    for raw_origin in allow_origins:
+        origin = raw_origin.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        hostname = parsed.hostname or ""
+        if _is_localhost_like_host(hostname):
+            continue
+        if parsed.scheme == "https" and "cloudfront.net" in hostname:
+            cloudfront_https = origin
+            break
+        if parsed.scheme == "https" and any_https is None:
+            any_https = origin
+            continue
+        if parsed.scheme == "http" and any_http is None:
+            any_http = origin
+
+    return cloudfront_https or any_https or any_http
+
+
+def _normalize_scheduling_public_links(config: "RuntimeConfig") -> None:
+    """Replace localhost interview links with one public frontend origin when available."""
+
+    public_base_url = _derive_public_frontend_base_url(
+        allow_origins=config.cors.allow_origins,
+    )
+    if not public_base_url:
+        return
+
+    scheduling = config.scheduling
+    if _is_localhost_like_url(scheduling.candidate_confirmation_page_url):
+        scheduling.candidate_confirmation_page_url = f"{public_base_url}/interview/confirm/"
+    if _is_localhost_like_url(scheduling.interview_action_page_url):
+        scheduling.interview_action_page_url = f"{public_base_url}/interview/action/"
+    if _is_localhost_like_url(scheduling.manager_reschedule_action_page_url):
+        scheduling.manager_reschedule_action_page_url = f"{public_base_url}/interview/action/"
+
+
 @lru_cache(maxsize=1)
 def get_runtime_config() -> RuntimeConfig:
     """Load and cache runtime configuration from YAML."""
@@ -1012,4 +1076,6 @@ def get_runtime_config() -> RuntimeConfig:
         combined_config, _unwrap_overlay(raw_template_config, "templates")
     )
 
-    return RuntimeConfig.model_validate(combined_config)
+    runtime_config = RuntimeConfig.model_validate(combined_config)
+    _normalize_scheduling_public_links(runtime_config)
+    return runtime_config

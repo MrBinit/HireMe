@@ -12,7 +12,7 @@ scheduling:
   receive_wait_seconds: 20
   visibility_timeout_seconds: 300
   max_receive_count: 5
-  auto_enqueue_after_shortlist: true
+  auto_enqueue_after_shortlist: false
   target_statuses:
     - shortlisted
   min_slots: 3
@@ -33,9 +33,9 @@ scheduling:
   reminder_batch_size: 100
   timezone: Asia/Kathmandu
   use_domain_wide_delegation: false
-  candidate_confirmation_page_url: "http://localhost:3000/interview/confirm"
-  interview_action_page_url: "http://localhost:3000/interview/action"
-  manager_reschedule_action_page_url: "http://localhost:3000/interview/action"
+  candidate_confirmation_page_url: "https://d3lsp5lbmwo1k3.cloudfront.net/interview/confirm/"
+  interview_action_page_url: "https://d3lsp5lbmwo1k3.cloudfront.net/interview/action/"
+  manager_reschedule_action_page_url: "https://d3lsp5lbmwo1k3.cloudfront.net/interview/action/"
   confirmable_statuses:
     - interview_options_sent
     - interview_email_sent
