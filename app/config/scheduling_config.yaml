@@ -12,7 +12,7 @@ scheduling:
   receive_wait_seconds: 20
   visibility_timeout_seconds: 300
   max_receive_count: 5
-  auto_enqueue_after_shortlist: false
+  auto_enqueue_after_shortlist: true
   target_statuses:
     - shortlisted
   min_slots: 3

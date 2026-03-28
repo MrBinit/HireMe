@@ -557,7 +557,7 @@ class SchedulingRuntimeConfig(BaseModel):
     receive_wait_seconds: int = 20
     visibility_timeout_seconds: int = 300
     max_receive_count: int = 5
-    auto_enqueue_after_shortlist: bool = False
+    auto_enqueue_after_shortlist: bool = True
     target_statuses: list[str] = Field(default_factory=lambda: ["shortlisted"])
     min_slots: int = 3
     max_slots: int = 5
