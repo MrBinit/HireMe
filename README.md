@@ -2,6 +2,9 @@
 
 HireMe is an end-to-end hiring workflow that moves a candidate from application submission to interview scheduling, offer signature, and Slack onboarding.
 
+## =Overview
+- See `overview.md` for a concise component-by-component summary.
+
 ## Project Summary
 This project includes:
 - Candidate-facing career flow with job listings and application form
@@ -278,16 +281,6 @@ If extended further, I would add:
 - a script to run batch scoring and summarization evaluations,
 - regression reporting for prompt/model changes,
 - confidence-based routing or human-review escalation when evidence quality is weak.
-
-## Submission Checklist
-- Replace placeholders before final submission email.
-- Working prototype:
-  - Local run supported via backend + frontend startup commands in docs
-  - Deployed URL: `<add-url>`
-- Loom walkthrough (10-15 min): `<add-loom-link>`
-- GitHub repository link: `<add-repo-link>`
-- Edge-case documentation: `docs/edge_case_documentation.md`
-- Assumptions/trade-offs documentation: `docs/assumptions_and_tradeoffs.md`
 
 ## Documentation Index
 - [docs/candidate_career_page_implementation.md](docs/candidate_career_page_implementation.md)
