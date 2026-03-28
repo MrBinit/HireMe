@@ -18,7 +18,11 @@ from app.schemas.application import (
     ApplicationRecord,
 )
 from app.schemas.auth import AdminAccessTokenResponse, AdminLoginPayload
-from app.schemas.reference import ReferenceCreatePayload, ReferenceListResponse, ReferenceRecord
+from app.schemas.reference import (
+    RefereeReferenceCreatePayload,
+    ReferenceListResponse,
+    ReferenceRecord,
+)
 from app.services.admin_auth_service import (
     AdminAuthConfigurationError,
     AdminAuthError,
@@ -101,13 +105,13 @@ async def get_referee_candidate(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_referee_reference(
-    payload: ReferenceCreatePayload,
+    payload: RefereeReferenceCreatePayload,
     _: AdminPrincipal = Depends(get_referee_principal),
     service: ReferenceService = Depends(get_reference_service_dep),
 ) -> ReferenceRecord:
-    """Create one reference entry for an existing candidate application."""
+    """Create one reference entry from referee-provided applicant and referee details."""
 
-    return await service.create(payload)
+    return await service.create_from_referee(payload)
 
 
 @router.get("/referee/references", response_model=ReferenceListResponse)

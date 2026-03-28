@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 import json
 import re
 import textwrap
@@ -22,6 +23,8 @@ from app.core.runtime_config import (
     ApplicationRuntimeConfig,
     NotificationRuntimeConfig,
     ParseRuntimeConfig,
+    ResearchRuntimeConfig,
+    SchedulingRuntimeConfig,
 )
 from app.infra.s3_store import S3ObjectStore
 from app.repositories.application_repository import (
@@ -43,11 +46,32 @@ from app.services.email_sender import (
     ApplicationConfirmationEmail,
     EmailSendError,
     EmailSender,
+    InitialScreeningRejectionEmail,
     ManagerDecisionRejectionEmail,
     OfferLetterSignedAlertEmail,
     OfferLetterCandidateEmail,
     SlackJoinManagerAlertEmail,
     SlackWorkspaceInviteEmail,
+)
+from app.services.research_queue import (
+    CandidateResearchEnrichmentJob,
+    NoopResearchQueuePublisher,
+    ResearchQueuePublishError,
+    ResearchQueuePublisher,
+)
+from app.services.webhook_event_queue import (
+    NoopWebhookEventQueuePublisher,
+    WebhookEventJob,
+    WebhookEventType,
+    WebhookEventQueueBackpressureError,
+    WebhookEventQueuePublishError,
+    WebhookEventQueuePublisher,
+)
+from app.services.scheduling_queue import (
+    CandidateInterviewSchedulingJob,
+    NoopSchedulingQueuePublisher,
+    SchedulingQueuePublishError,
+    SchedulingQueuePublisher,
 )
 from app.services.parse_queue import ParseQueuePublishError, ParseQueuePublisher, ResumeParseJob
 from app.services.resume_storage import ResumeStorage
@@ -74,10 +98,15 @@ class ApplicationService:
         parse_queue_publisher: ParseQueuePublisher,
         notification_config: NotificationRuntimeConfig,
         email_sender: EmailSender,
+        research_enrichment_config: ResearchRuntimeConfig.EnrichmentRuntimeConfig | None = None,
+        research_queue_publisher: ResearchQueuePublisher | None = None,
+        scheduling_config: SchedulingRuntimeConfig | None = None,
+        scheduling_queue_publisher: SchedulingQueuePublisher | None = None,
         offer_letter_service: OfferLetterService | None = None,
         docusign_service: DocusignService | None = None,
         slack_service: SlackService | None = None,
         slack_welcome_service: SlackWelcomeService | None = None,
+        webhook_event_queue_publisher: WebhookEventQueuePublisher | None = None,
         s3_store: S3ObjectStore | None = None,
         s3_bucket: str | None = None,
     ):
@@ -89,12 +118,28 @@ class ApplicationService:
         self._resume_storage = resume_storage
         self._parse_config = parse_config
         self._parse_queue_publisher = parse_queue_publisher
+        self._research_enrichment_config = (
+            research_enrichment_config
+            or ResearchRuntimeConfig.EnrichmentRuntimeConfig(use_queue=False)
+        )
+        self._research_queue_publisher = research_queue_publisher or NoopResearchQueuePublisher()
+        self._scheduling_config = scheduling_config or SchedulingRuntimeConfig(
+            enabled=False,
+            use_queue=False,
+            auto_enqueue_after_shortlist=False,
+        )
+        self._scheduling_queue_publisher = (
+            scheduling_queue_publisher or NoopSchedulingQueuePublisher()
+        )
         self._notification_config = notification_config
         self._email_sender = email_sender
         self._offer_letter_service = offer_letter_service
         self._docusign_service = docusign_service
         self._slack_service = slack_service
         self._slack_welcome_service = slack_welcome_service
+        self._webhook_event_queue_publisher = (
+            webhook_event_queue_publisher or NoopWebhookEventQueuePublisher()
+        )
         self._s3_store = s3_store
         self._s3_bucket = s3_bucket
 
@@ -102,6 +147,8 @@ class ApplicationService:
         self,
         payload: ApplicationCreatePayload,
         resume: UploadFile,
+        *,
+        send_confirmation_email: bool = True,
     ) -> ApplicationRecord:
         """Submit an application and persist resume metadata."""
 
@@ -250,26 +297,48 @@ class ApplicationService:
                         "application submission failed to queue for parsing"
                     ) from None
 
-        if self._notification_config.enabled:
-            email_payload = ApplicationConfirmationEmail(
-                candidate_name=created.full_name,
-                candidate_email=str(created.email),
-                role_title=created.role_selection,
+        if send_confirmation_email:
+            await self._send_application_confirmation_email(
+                candidate=created,
+                fail_on_error=self._notification_config.fail_submission_on_send_error,
             )
-            try:
-                with anyio.fail_after(self._notification_config.send_timeout_seconds):
-                    await self._email_sender.send_application_confirmation(email_payload)
-            except (EmailSendError, TimeoutError):
-                logger.exception(
-                    "failed to send application confirmation email",
-                    extra={"application_id": str(created.id)},
-                )
-                if self._notification_config.fail_submission_on_send_error:
-                    raise ApplicationValidationError(
-                        "application submission email notification failed"
-                    ) from None
 
         return created
+
+    async def send_application_confirmation_email_for_application(
+        self,
+        *,
+        application_id: UUID,
+    ) -> None:
+        """Send submission confirmation email for an existing application id."""
+
+        candidate = await self._repository.get_by_id(application_id)
+        if candidate is None:
+            return
+        await self._send_application_confirmation_email(
+            candidate=candidate,
+            fail_on_error=False,
+        )
+
+    async def enqueue_application_confirmation_email(
+        self,
+        *,
+        application_id: UUID,
+    ) -> None:
+        """Queue confirmation email side effects when webhook async queue is enabled."""
+
+        if not self._is_webhook_async_queue_enabled():
+            await self.send_application_confirmation_email_for_application(
+                application_id=application_id
+            )
+            return
+
+        event_key = f"application_confirmation_email:{application_id}"
+        await self._publish_webhook_event_job(
+            event_type="application_confirmation_email",
+            event_key=event_key,
+            payload={"application_id": str(application_id)},
+        )
 
     async def get_allowed_roles(self) -> list[str]:
         """Return role titles currently available from job openings."""
@@ -371,6 +440,14 @@ class ApplicationService:
 
         return await self._repository.get_by_id(application_id)
 
+    async def get_by_confirmed_meeting_link(self, *, meeting_link: str) -> ApplicationRecord | None:
+        """Return latest candidate record for one confirmed meeting link."""
+
+        normalized_link = meeting_link.strip()
+        if not normalized_link:
+            return None
+        return await self._repository.get_by_confirmed_meeting_link(meeting_link=normalized_link)
+
     async def update_applicant_status(
         self,
         *,
@@ -380,6 +457,7 @@ class ApplicationService:
     ) -> ApplicationRecord | None:
         """Update applicant status and return the updated record."""
 
+        previous = await self._repository.get_by_id(application_id)
         updated = await self._repository.update_applicant_status(
             application_id=application_id,
             applicant_status=applicant_status,
@@ -387,7 +465,21 @@ class ApplicationService:
         )
         if not updated:
             return None
-        return await self._repository.get_by_id(application_id)
+        refreshed = await self._repository.get_by_id(application_id)
+        if refreshed is None:
+            return None
+
+        transitioned = previous is None or previous.applicant_status != refreshed.applicant_status
+        if transitioned and refreshed.applicant_status == "shortlisted":
+            await self._enqueue_research_for_manual_shortlist(candidate=refreshed)
+            await self._enqueue_scheduling_for_manual_shortlist(candidate=refreshed)
+            latest = await self._repository.get_by_id(application_id)
+            if latest is not None:
+                refreshed = latest
+        elif transitioned and refreshed.applicant_status == "rejected":
+            await self._send_manual_rejection_email(candidate=refreshed, note=note)
+
+        return refreshed
 
     async def update_admin_review(
         self,
@@ -429,13 +521,10 @@ class ApplicationService:
         candidate = await self._repository.get_by_id(application_id)
         if candidate is None:
             return None
-        # DEMO TEMPORARY OVERRIDE:
-        # Allow manager decision without waiting for interview_done.
-        # Restore the interview_done gate after demo.
-        # if candidate.interview_schedule_status != "interview_done":
-        #     raise ApplicationValidationError(
-        #         "manager decision is allowed only when interview_schedule_status is interview_done"
-        #     )
+        if candidate.interview_schedule_status != "interview_done":
+            raise ApplicationValidationError(
+                "manager decision is allowed only when interview_schedule_status is interview_done"
+            )
 
         decision_note = (note or "").strip() or None
         decision_time = datetime.now(tz=timezone.utc)
@@ -503,6 +592,106 @@ class ApplicationService:
         if decision == "reject":
             await self._send_manager_rejection_email(candidate=refreshed)
         return refreshed
+
+    async def set_fireflies_demo_state(
+        self,
+        *,
+        application_id: UUID,
+        mock_completed: bool,
+    ) -> ApplicationRecord | None:
+        """Force Fireflies transcript state for demo scenarios."""
+
+        candidate = await self._repository.get_by_id(application_id)
+        if candidate is None:
+            return None
+
+        now_utc = datetime.now(tz=timezone.utc)
+        current_options = (
+            dict(candidate.interview_schedule_options)
+            if isinstance(candidate.interview_schedule_options, dict)
+            else {}
+        )
+        fireflies_state = (
+            dict(current_options.get("fireflies"))
+            if isinstance(current_options.get("fireflies"), dict)
+            else {}
+        )
+        transcript_sync = (
+            dict(fireflies_state.get("transcript_sync"))
+            if isinstance(fireflies_state.get("transcript_sync"), dict)
+            else {}
+        )
+
+        meeting_link = str(current_options.get("confirmed_meeting_link") or "").strip() or None
+        manager_email = (
+            str(current_options.get("confirmed_manager_email") or "").strip()
+            or candidate.interview_calendar_email
+            or None
+        )
+        transcript_sync["attempts"] = int(transcript_sync.get("attempts") or 0) + 1
+        transcript_sync["last_checked_at"] = now_utc.isoformat()
+
+        if mock_completed:
+            fake_url = f"https://app.fireflies.ai/view/mock-{application_id}"
+            fake_summary = (
+                f"Mock transcript summary for {candidate.full_name}: "
+                f"interview completed for {candidate.role_selection} with strong role-fit signals."
+            )
+            transcript_sync["status"] = "completed"
+            transcript_sync["last_error"] = None
+            fireflies_state["status"] = "completed"
+            fireflies_state["completed_at"] = now_utc.isoformat()
+            fireflies_state["transcript"] = {
+                "id": f"mock-{application_id}",
+                "title": f"Mock HireMe Interview - {candidate.full_name}",
+                "url": fake_url,
+                "meeting_link": meeting_link,
+                "occurred_at": now_utc.isoformat(),
+                "summary": fake_summary,
+                "action_items": [
+                    "Share interview notes with panel.",
+                    "Move candidate to manager decision stage.",
+                ],
+                "keywords": ["mock", "hireme", "interview"],
+                "raw": {"mock": True, "source": "admin_demo_toggle"},
+            }
+            updates: dict[str, object] = {
+                "interview_schedule_status": self._scheduling_config.fireflies.completed_schedule_status,
+                "interview_transcript_status": "completed",
+                "interview_transcript_url": fake_url,
+                "interview_transcript_summary": fake_summary,
+                "interview_transcript_synced_at": now_utc,
+            }
+        else:
+            transcript_sync["status"] = "polling"
+            transcript_sync["last_error"] = "demo mode false: transcript is not ready yet"
+            fireflies_state["status"] = "processing"
+            fireflies_state["completed_at"] = None
+            fireflies_state["transcript"] = None
+            updates = {
+                "interview_schedule_status": self._scheduling_config.booked_status,
+                "interview_transcript_status": "processing",
+                "interview_transcript_url": None,
+                "interview_transcript_summary": None,
+                "interview_transcript_synced_at": None,
+            }
+
+        fireflies_state["enabled"] = True
+        if manager_email:
+            fireflies_state["manager_email"] = manager_email
+        fireflies_state["candidate_email"] = str(candidate.email)
+        fireflies_state["meeting_link"] = meeting_link
+        fireflies_state["transcript_sync"] = transcript_sync
+        current_options["fireflies"] = fireflies_state
+        updates["interview_schedule_options"] = current_options
+
+        updated = await self._repository.update_admin_review(
+            application_id=application_id,
+            updates=updates,
+        )
+        if not updated:
+            return None
+        return await self._repository.get_by_id(application_id)
 
     async def approve_offer_letter(
         self,
@@ -572,6 +761,7 @@ class ApplicationService:
         *,
         application_id: UUID,
         webhook_token: str | None,
+        webhook_signature: str | None = None,
         raw_body: bytes,
         content_type: str | None,
     ) -> bool:
@@ -580,7 +770,11 @@ class ApplicationService:
         if self._docusign_service is None or not self._docusign_service.enabled:
             raise ApplicationValidationError("DocuSign is not configured")
         try:
-            self._docusign_service.validate_webhook_secret(token=webhook_token)
+            self._docusign_service.validate_webhook_secret(
+                token=webhook_token,
+                raw_body=raw_body,
+                signature=webhook_signature,
+            )
             event = self._docusign_service.parse_webhook_event(
                 raw_body=raw_body,
                 content_type=content_type,
@@ -762,6 +956,7 @@ class ApplicationService:
         *,
         raw_body: bytes,
         headers: Mapping[str, str],
+        defer_team_join_processing: bool = False,
     ) -> dict[str, object]:
         """Process one Slack events callback request."""
         payload: dict[str, object]
@@ -805,6 +1000,9 @@ class ApplicationService:
         if not isinstance(user, dict):
             return {"processed": False}
         user_id = str(user.get("id") or "").strip()
+        event_id = str(payload.get("event_id") or "").strip()
+        event_ts = str(event.get("event_ts") or "").strip()
+        team_id = str(payload.get("team_id") or "").strip()
         profile = user.get("profile")
         email = ""
         if isinstance(profile, dict):
@@ -814,11 +1012,71 @@ class ApplicationService:
         if not user_id or not email:
             return {"processed": False}
 
+        if defer_team_join_processing:
+            if self._is_webhook_async_queue_enabled():
+                event_key = self._build_slack_team_join_event_key(
+                    event_id=event_id,
+                    team_id=team_id,
+                    event_ts=event_ts,
+                    slack_user_id=user_id,
+                    candidate_email=email,
+                )
+                await self._publish_webhook_event_job(
+                    event_type="slack_team_join",
+                    event_key=event_key,
+                    payload={
+                        "slack_user_id": user_id,
+                        "candidate_email": email,
+                    },
+                )
+                return {"processed": True, "queued": True}
+            asyncio.create_task(
+                self._process_slack_team_join_background(
+                    slack_user_id=user_id,
+                    candidate_email=email,
+                )
+            )
+            return {"processed": True, "queued": False}
         processed = await self._process_slack_team_join(
             slack_user_id=user_id,
             candidate_email=email,
         )
         return {"processed": processed}
+
+    async def process_slack_team_join_event(
+        self,
+        *,
+        slack_user_id: str,
+        candidate_email: str,
+    ) -> bool:
+        """Run Slack team-join onboarding workflow for queued worker events."""
+
+        return await self._process_slack_team_join(
+            slack_user_id=slack_user_id,
+            candidate_email=candidate_email,
+        )
+
+    async def _process_slack_team_join_background(
+        self,
+        *,
+        slack_user_id: str,
+        candidate_email: str,
+    ) -> None:
+        """Execute Slack team-join onboarding side effects in detached background task."""
+
+        try:
+            await self._process_slack_team_join(
+                slack_user_id=slack_user_id,
+                candidate_email=candidate_email,
+            )
+        except Exception:
+            logger.exception(
+                "background Slack team_join processing failed",
+                extra={
+                    "slack_user_id": slack_user_id,
+                    "candidate_email": candidate_email,
+                },
+            )
 
     async def _trigger_slack_invite_after_signature(self, *, candidate: ApplicationRecord) -> None:
         """Kick off Slack invite immediately after offer signature."""
@@ -854,14 +1112,6 @@ class ApplicationService:
             await self._repository.update_admin_review(
                 application_id=candidate.id,
                 updates=updates,
-            )
-            invite_link = (
-                self._config.slack_invite_fallback_join_url.strip()
-                or "https://app.slack.com/client"
-            )
-            await self._send_slack_invite_link_email(
-                candidate=candidate,
-                invite_link=invite_link,
             )
         except Exception as exc:
             fallback_link = self._config.slack_invite_fallback_join_url.strip()
@@ -1018,6 +1268,61 @@ class ApplicationService:
             )
             return False
 
+    def _is_webhook_async_queue_enabled(self) -> bool:
+        """Return True when durable webhook side-effect queueing is active."""
+
+        cfg = self._config.webhook_async
+        return bool(cfg.enabled and cfg.use_queue and cfg.provider == "sqs" and cfg.queue_url)
+
+    async def _publish_webhook_event_job(
+        self,
+        *,
+        event_type: WebhookEventType,
+        event_key: str,
+        payload: dict[str, object],
+    ) -> None:
+        """Publish one deferred webhook side-effect job with shared timeout handling."""
+
+        timeout = max(0.1, float(self._config.webhook_async.enqueue_timeout_seconds))
+        job = WebhookEventJob(
+            event_type=event_type,
+            event_key=event_key.strip(),
+            payload=payload,
+            queued_at=datetime.now(tz=timezone.utc),
+        )
+        try:
+            with anyio.fail_after(timeout):
+                await self._webhook_event_queue_publisher.publish(job)
+        except WebhookEventQueueBackpressureError as exc:
+            raise ApplicationValidationError(str(exc)) from exc
+        except (WebhookEventQueuePublishError, TimeoutError) as exc:
+            raise ApplicationValidationError("failed to enqueue webhook side-effect job") from exc
+
+    @staticmethod
+    def _build_slack_team_join_event_key(
+        *,
+        event_id: str,
+        team_id: str,
+        event_ts: str,
+        slack_user_id: str,
+        candidate_email: str,
+    ) -> str:
+        """Build deterministic idempotency key for Slack team_join callbacks."""
+
+        if event_id.strip():
+            return f"slack:team_join:{event_id.strip()}"
+        stable = ":".join(
+            [
+                "slack",
+                "team_join",
+                team_id.strip() or "unknown_team",
+                event_ts.strip() or "unknown_ts",
+                slack_user_id.strip() or "unknown_user",
+                candidate_email.strip().casefold() or "unknown_email",
+            ]
+        )
+        return stable
+
     def _render_manager_selection_template(
         self,
         *,
@@ -1076,6 +1381,34 @@ class ApplicationService:
             )
             raise ApplicationValidationError("failed to send offer letter email") from exc
 
+    async def _send_application_confirmation_email(
+        self,
+        *,
+        candidate: ApplicationRecord,
+        fail_on_error: bool,
+    ) -> None:
+        """Send candidate submission confirmation email with optional strict failure mode."""
+
+        if not self._notification_config.enabled:
+            return
+        email_payload = ApplicationConfirmationEmail(
+            candidate_name=candidate.full_name,
+            candidate_email=str(candidate.email),
+            role_title=candidate.role_selection,
+        )
+        try:
+            with anyio.fail_after(self._notification_config.send_timeout_seconds):
+                await self._email_sender.send_application_confirmation(email_payload)
+        except (EmailSendError, TimeoutError):
+            logger.exception(
+                "failed to send application confirmation email",
+                extra={"application_id": str(candidate.id)},
+            )
+            if fail_on_error:
+                raise ApplicationValidationError(
+                    "application submission email notification failed"
+                ) from None
+
     async def _send_manager_rejection_email(self, *, candidate: ApplicationRecord) -> None:
         """Send manager-final rejection notice to candidate."""
 
@@ -1097,6 +1430,123 @@ class ApplicationService:
             )
             if self._notification_config.fail_submission_on_send_error:
                 raise ApplicationValidationError("failed to send rejection email") from None
+
+    async def _send_manual_rejection_email(
+        self,
+        *,
+        candidate: ApplicationRecord,
+        note: str | None,
+    ) -> None:
+        """Send initial-screening style rejection notice for manual admin rejection."""
+
+        if not self._notification_config.enabled:
+            return
+
+        note_text = (note or "").strip()
+        reason = candidate.rejection_reason or note_text or self._config.ai_score_fail_reason
+        payload = InitialScreeningRejectionEmail(
+            candidate_name=candidate.full_name,
+            candidate_email=str(candidate.email),
+            role_title=candidate.role_selection,
+            rejection_reason=reason,
+        )
+        try:
+            with anyio.fail_after(self._notification_config.send_timeout_seconds):
+                await self._email_sender.send_initial_screening_rejection(payload)
+        except (EmailSendError, TimeoutError):
+            logger.exception(
+                "failed to send manual rejection email",
+                extra={"application_id": str(candidate.id)},
+            )
+
+    async def _enqueue_research_for_manual_shortlist(self, *, candidate: ApplicationRecord) -> None:
+        """Queue research enrichment after admin manually advances candidate."""
+
+        config = self._research_enrichment_config
+        if not config.use_queue or config.provider != "sqs" or not config.queue_url:
+            return
+        if candidate.online_research_summary:
+            return
+        if candidate.applicant_status not in set(config.target_statuses):
+            return
+
+        job = CandidateResearchEnrichmentJob(
+            application_id=candidate.id,
+            queued_at=datetime.now(tz=timezone.utc),
+        )
+        try:
+            with anyio.fail_after(config.enqueue_timeout_seconds):
+                await self._research_queue_publisher.publish(job)
+            logger.info(
+                "manual shortlist application_id=%s research job queued",
+                candidate.id,
+            )
+        except (ResearchQueuePublishError, TimeoutError):
+            logger.exception(
+                "manual shortlist application_id=%s failed to queue research job",
+                candidate.id,
+            )
+        except Exception:
+            logger.exception(
+                "manual shortlist application_id=%s unexpected research enqueue failure",
+                candidate.id,
+            )
+
+    async def _enqueue_scheduling_for_manual_shortlist(
+        self, *, candidate: ApplicationRecord
+    ) -> None:
+        """Queue interview scheduling after admin manually advances candidate."""
+
+        config = self._scheduling_config
+        if (
+            not config.enabled
+            or not config.use_queue
+            or config.provider != "sqs"
+            or not config.queue_url
+            or not config.auto_enqueue_after_shortlist
+        ):
+            return
+        if candidate.applicant_status not in set(config.target_statuses):
+            return
+        if candidate.interview_schedule_status in {
+            "queued",
+            "in_progress",
+            "interview_confirming",
+            "interview_options_sent",
+            "interview_email_sent",
+            "options_sent",
+            "interview_booked",
+        }:
+            return
+
+        job = CandidateInterviewSchedulingJob(
+            application_id=candidate.id,
+            queued_at=datetime.now(tz=timezone.utc),
+        )
+        try:
+            with anyio.fail_after(config.enqueue_timeout_seconds):
+                await self._scheduling_queue_publisher.publish(job)
+            await self._repository.update_admin_review(
+                application_id=candidate.id,
+                updates={
+                    "interview_schedule_status": "queued",
+                    "interview_schedule_error": None,
+                },
+            )
+            logger.info(
+                "manual shortlist application_id=%s scheduling job queued",
+                candidate.id,
+            )
+        except (SchedulingQueuePublishError, TimeoutError):
+            logger.exception(
+                "manual shortlist application_id=%s failed to queue scheduling job",
+                candidate.id,
+            )
+        except Exception:
+            logger.exception(
+                "manual shortlist application_id=%s unexpected scheduling enqueue failure",
+                candidate.id,
+            )
 
     async def _send_offer_signed_alert(self, *, candidate: ApplicationRecord) -> None:
         """Alert hiring manager as soon as candidate signs the offer."""
@@ -1381,12 +1831,13 @@ class ApplicationService:
     def _normalize_payload(self, payload: ApplicationCreatePayload) -> ApplicationCreatePayload:
         """Trim user text fields."""
 
+        github_url = payload.github_url or payload.portfolio_url or payload.linkedin_url
         return ApplicationCreatePayload(
             full_name=payload.full_name.strip(),
             email=payload.email,
             linkedin_url=payload.linkedin_url,
             portfolio_url=payload.portfolio_url,
-            github_url=payload.github_url,
+            github_url=github_url,
             twitter_url=payload.twitter_url,
             role_selection=payload.role_selection.strip(),
         )

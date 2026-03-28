@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import base64
+import hashlib
+import hmac
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -195,11 +197,37 @@ class DocusignService:
             raise DocusignApiError("DocuSign response missing envelopeId")
         return DocusignEnvelopeDispatch(envelope_id=envelope_id, status=status)
 
-    def validate_webhook_secret(self, *, token: str | None) -> None:
-        """Validate shared webhook token when configured."""
+    def validate_webhook_secret(
+        self,
+        *,
+        token: str | None,
+        raw_body: bytes | None = None,
+        signature: str | None = None,
+    ) -> None:
+        """Validate DocuSign webhook using signature header or shared token fallback."""
 
         if not self._webhook_secret:
             return
+
+        signature_value = (signature or "").strip()
+        if signature_value:
+            payload = raw_body or b""
+            digest = hmac.new(
+                self._webhook_secret.encode("utf-8"),
+                payload,
+                hashlib.sha256,
+            ).digest()
+            expected_base64 = base64.b64encode(digest).decode("ascii")
+            normalized_signature = signature_value
+            if normalized_signature.lower().startswith("sha256="):
+                normalized_signature = normalized_signature.split("=", 1)[1].strip()
+            if hmac.compare_digest(normalized_signature, expected_base64):
+                return
+            expected_hex = digest.hex()
+            if hmac.compare_digest(normalized_signature.lower(), expected_hex):
+                return
+            raise DocusignApiError("invalid DocuSign webhook signature")
+
         if (token or "").strip() != self._webhook_secret:
             raise DocusignApiError("invalid DocuSign webhook token")
 

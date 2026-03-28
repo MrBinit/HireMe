@@ -25,8 +25,10 @@ from app.schemas.application import (
     ApplicantStatus,
     ApplicationListResponse,
     ApplicationRecord,
+    FirefliesDemoPayload,
     ManagerDecisionPayload,
     ResumeDownloadResponse,
+    parse_research_summary_json,
 )
 from app.schemas.auth import AdminAccessTokenResponse, AdminLoginPayload
 from app.infra.s3_store import S3ObjectStore
@@ -304,6 +306,30 @@ async def update_manager_decision(
         decision=payload.decision,
         note=payload.note,
         selection_details=payload.selection_details,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Candidate application not found.",
+        )
+    return updated
+
+
+@router.patch(
+    "/admin/candidates/{application_id}/fireflies-demo",
+    response_model=ApplicationRecord,
+)
+async def set_fireflies_demo_state(
+    application_id: UUID,
+    payload: FirefliesDemoPayload,
+    _: AdminPrincipal = Depends(get_admin_principal),
+    service: ApplicationService = Depends(get_application_service_dep),
+) -> ApplicationRecord:
+    """Force transcript-ready vs transcript-pending demo state for one candidate."""
+
+    updated = await service.set_fireflies_demo_state(
+        application_id=application_id,
+        mock_completed=payload.mock_completed,
     )
     if updated is None:
         raise HTTPException(
@@ -622,6 +648,34 @@ async def _enqueue_candidate_scheduling(
                 f"allowed={scheduling_config.target_statuses}"
             ),
         )
+
+    research_summary = candidate.research_summary or parse_research_summary_json(
+        candidate.online_research_summary
+    )
+    if research_summary is not None:
+        manual_review_required = bool(
+            research_summary.deterministic_checks
+            and research_summary.deterministic_checks.manual_review_required
+        )
+        confidence = ""
+        if research_summary.llm_analysis and research_summary.llm_analysis.confidence:
+            confidence = research_summary.llm_analysis.confidence.strip().casefold()
+        elif (
+            research_summary.deterministic_checks
+            and research_summary.deterministic_checks.confidence_baseline
+        ):
+            confidence = (
+                research_summary.deterministic_checks.confidence_baseline.strip().casefold()
+            )
+
+        if manual_review_required or confidence == "low":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "candidate requires explicit reviewer action before scheduling; "
+                    "research confidence gate is active"
+                ),
+            )
 
     queued_at = datetime.now(tz=timezone.utc)
     job = CandidateInterviewSchedulingJob(

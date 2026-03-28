@@ -62,6 +62,12 @@ class ApplicationRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_by_confirmed_meeting_link(self, *, meeting_link: str) -> ApplicationRecord | None:
+        """Return latest application whose confirmed meeting link matches."""
+
+        raise NotImplementedError
+
+    @abstractmethod
     async def update_parse_state(
         self,
         *,

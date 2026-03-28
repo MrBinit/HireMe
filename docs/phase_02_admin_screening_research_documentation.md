@@ -65,8 +65,12 @@ Also available from candidate API payload (`ApplicationRecord`):
 ### Manual override support
 Manual override API is implemented:
 - `PATCH /api/v1/admin/candidates/{application_id}/review`
+- `PATCH /api/v1/admin/candidates/{application_id}/status`
 
 Admin can override applicant status and attach a note; note/history is persisted in `status_history` in DB.
+Manual status actions now trigger downstream parity behavior:
+- Human Move Ahead (`shortlisted`) -> backend auto-enqueues research and interview-scheduling jobs (when queue/runtime settings are enabled and candidate is eligible).
+- Human Don't Move Ahead (`rejected`) -> backend sends initial-screening style rejection email (when notifications are enabled).
 
 ## 4) Referee Flow (Real-World Reference Validation)
 Referee is treated as a first-class actor:
@@ -105,19 +109,25 @@ Done in parse processor before LLM scoring.
 ### First-layer screening rule
 `passed = experience_pass AND (skills_pass OR keyword_pass)`
 
+Experience rule behavior:
+- minimum years is always enforced
+- maximum years is enforced only when `prefilter_enforce_max_years = true`
+
 ### How initial screening is executed (step-by-step)
 1. Parse worker extracts structured resume signals (`skills`, `work_experience`, `education`, `key_achievements`).
 2. System loads the exact job opening the candidate applied to.
 3. Experience gate:
 - parse JD `experience_range` (example `2-4 years`)
 - compare with parsed total years of experience
+- enforce max-years only when configured (`prefilter_enforce_max_years`)
 4. Skill gate:
-- extract normalized skill keywords from JD requirements
-- count matches against parsed candidate skills
+- split JD requirements into must-have vs nice-to-have
+- extract normalized skill keywords from must-have requirements
+- count token/phrase matches against parsed candidate skills (canonical alias normalization)
 - require minimum matches (`prefilter_min_skill_matches`)
 5. Keyword gate:
-- build keyword set from JD requirements + responsibilities
-- compare against normalized `parsed_search_text`
+- build keyword set from must-have requirements + responsibilities
+- compare against normalized tokenized `parsed_search_text`
 - require minimum matches (`prefilter_min_keyword_matches`)
 6. Decision:
 - pass only if `experience_pass` and (`skills_pass` or `keyword_pass`)
@@ -125,7 +135,11 @@ Done in parse processor before LLM scoring.
 - pass/fail booleans
 - matched counts
 - sample matched skills/keywords
-- rule used (`experience_and_(skills_or_keywords)`)
+- requirement split counts (`must_have_requirements_count`, `nice_to_have_requirements_count`)
+- max-years enforcement flag (`enforce_max_years`)
+- rule used:
+  - `min_experience_and_(skills_or_keywords)` when max-years is soft
+  - `experience_and_(skills_or_keywords)` when max-years is enforced
 8. Auto status update:
 - pass -> `screened`
 - fail -> `rejected` (with rejection reason and optional email)
@@ -141,6 +155,7 @@ Configured defaults:
 - `prefilter_min_keyword_matches = 5`
 - `prefilter_min_skill_matches = 5`
 - `prefilter_max_search_text_chars = 8000`
+- `prefilter_enforce_max_years = false`
 
 If this stage fails:
 - candidate is set to `rejected`
@@ -168,6 +183,8 @@ LLM input includes:
 - compact work summary
 - education summary
 - target role
+- must-have skills
+- nice-to-have skills
 - required skills
 - experience range
 - combined JD text (responsibilities + requirements)
@@ -192,6 +209,8 @@ Template placeholders used:
 - `{work_summary}`
 - `{education}`
 - `{role}`
+- `{must_have_skills}`
+- `{nice_to_have_skills}`
 - `{required_skills}`
 - `{min_exp}`
 - `{max_exp}`
@@ -214,7 +233,7 @@ The model is required to return:
 
 Backend validation then enforces:
 - numeric bounds per category
-- `score` consistency with breakdown total (within tolerance)
+- `score` consistency with breakdown total (tolerance: `<= 2`)
 
 If output is invalid JSON or fails schema checks, evaluation is treated as failed.
 
@@ -241,8 +260,8 @@ Research runs for shortlisted candidates to reduce interviewer prep time.
 - X/Twitter extraction module: Twitter API v2 extractor exists
 
 ### Current runtime behavior note
-In current queued shortlist pipeline (`enrich_shortlisted_llm_profiles.py`), Twitter is intentionally mocked by default to avoid false profile attribution risk.  
-Standalone Twitter API extractor exists and can be used where handle confidence is high.
+In current queued shortlist pipeline (`enrich_shortlisted_llm_profiles.py`), Twitter/X enrichment is intentionally skipped by default to avoid false profile attribution risk.  
+Standalone Twitter API extractor exists and can be used later where handle confidence is high.
 
 ### Why identity matching is hard
 Name-only matching is noisy:
@@ -284,15 +303,27 @@ System compares resume signals against extracted online signals and flags:
 
 ### Final research synthesis (LLM + fallback)
 Inputs to synthesis step:
-- resume snapshot
-- extractor outputs
-- cross-check results
-- issue flags
+- curated evidence package (sanitized and bounded)
+  - candidate context
+  - resume snapshot
+  - LinkedIn/GitHub/portfolio evidence
+  - Twitter mock block
+  - cross-check results
+  - issue flags
+  - deterministic quality checks (`manual_review_required`, `confidence_baseline`, source counts)
+
+Hardening added in current implementation:
+- untrusted text sanitization before prompt packaging
+- instruction-like snippet filtering for prompt-injection resistance
+- strict evidence-only prompt contract (`EVIDENCE_JSON` only; no raw extractor dump)
+- model output now includes confidence + claim provenance references
 
 Expected output:
 - concise cross-reference summary
 - discrepancy list
 - 3-5 sentence candidate brief (readable under ~60 seconds)
+- confidence label (`high|medium|low`)
+- provenance list (claim -> evidence reference paths)
 
 Synthesis prompt is strict about:
 - use only provided JSON evidence
@@ -303,6 +334,30 @@ Synthesis prompt is strict about:
 Stored fields:
 - `online_research_summary` (structured compact JSON)
 - `candidate_brief` (manager-friendly brief)
+- `online_research_summary.deterministic_checks` for review routing context
+
+### API read contract update (typed research summary)
+- Candidate responses now include:
+  - `online_research_summary` (legacy/raw JSON string)
+  - `research_summary` (validated nested typed object parsed from `online_research_summary`)
+- `research_summary` is the preferred field for downstream consumers to avoid fragile JSON-string parsing.
+
+### Confidence-gate workflow behavior
+- Enrichment computes deterministic routing checks:
+  - `manual_review_required`
+  - `confidence_baseline`
+- If `manual_review_required=true` or effective confidence is `low`:
+  - candidate is routed to explicit reviewer action path (`sent_to_manager`)
+  - scheduling queue endpoint refuses enqueue with `422` until reviewer resolves
+
+### Research quality telemetry
+- Research SQS worker tracks and logs:
+  - `manual_review_required`
+  - `low_confidence`
+  - `high_severity_flags`
+  - `parse_failures`
+  - `fallback_model_usage`
+  - `heuristic_fallback_usage`
 
 ## 7) Prompt and Scoring Summary (Quick Reference)
 - Screening prompt: rubric-based, strict JSON, conservative scoring.

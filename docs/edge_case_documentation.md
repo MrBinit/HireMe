@@ -119,14 +119,29 @@ Impact: **Hallucination risk, unstable scoring, bias risk, shortlist quality dri
 - Prefilter gate before expensive scoring to reduce unnecessary LLM calls.
 - Payload compaction and clipping to constrain token size/noise.
 - Strict prompt constraints and JSON-shaped outputs.
+- Curated/sanitized evidence packaging before LLM synthesis (no raw extractor dump).
+- Deterministic quality gates (`manual_review_required`, evidence coverage, confidence baseline).
+- Confidence + provenance fields in synthesis output for claim traceability.
 - Threshold gate (`70`) + admin manual override path.
 - Deterministic fallback outputs when extractors or model outputs are weak.
+
+### Separate note: Twitter identity ambiguity
+- In `enrich_shortlisted_llm_profiles` (strict shortlist research pipeline), Twitter/X enrichment is
+  intentionally mocked (`mode=mock`) instead of auto-discovered by name.
+- Rationale: avoid false profile attribution and unsupported candidate claims.
+- Standalone Twitter extractor remains available for future verified-handle workflows.
 
 ### Detection and monitoring
 - Metric: `score_variance_std` (repeat-run stability)
 - Metric: `hallucination_flag_rate` (unsupported claims)
 - Metric: `avg_tokens_per_candidate`
 - Metric: `manual_override_rate_after_ai_shortlist`
+- Worker metric: `manual_review_required` count
+- Worker metric: `low_confidence` count
+- Worker metric: `high_severity_flags` aggregate
+- Worker metric: `parse_failures` count (`llm_source != model`)
+- Worker metric: `fallback_model_usage` count
+- Worker metric: `heuristic_fallback_usage` count
 
 ### Recovery / fallback
 - If enrichment extraction fails, use deterministic fallback brief/issue flags.
@@ -159,3 +174,27 @@ Status: **Partially implemented; reliability and evaluation hardening pending**
 - 24-hour delay follow-up handled: **Yes**
 - Duplicate applications handled: **Yes**
 - No-reply scenarios handled (auto-release/expiry): **Yes**
+
+---
+
+## Additional Essential Edge Case (Review-Critical)
+
+### 6) Webhook Retry Duplication + Async Side-Effect Reliability
+
+Severity: **HIGH**
+Impact: **Duplicate side effects (replayed webhook) or dropped side effects (if queue/worker infra is down)**
+
+### Current behavior
+- Slack and Fireflies webhook handlers fast-ACK and enqueue durable SQS jobs.
+- Confirmation-email side effect is also queued.
+- Worker enforces idempotency using `processed_webhook_events` claim/complete/fail states.
+
+### Risk scenarios
+- Provider retries same webhook payload: duplicate jobs may be queued, but worker idempotency prevents duplicate side effects.
+- Queue/worker outage: side effects are delayed until worker recovers.
+
+### Remaining hardening
+- Enable DLQ + replay runbook in infrastructure for permanent-failure recovery.
+- Add queue alerts/auto-scaling policy in cloud monitoring stack.
+
+Status: **Implemented in application code (durable queue + idempotency); infra DLQ/alerting still recommended**

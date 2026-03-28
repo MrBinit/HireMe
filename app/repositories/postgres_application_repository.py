@@ -199,6 +199,38 @@ class PostgresApplicationRepository(ApplicationRepository):
                 return None
             return self._to_record(entity)
 
+    async def get_by_confirmed_meeting_link(self, *, meeting_link: str) -> ApplicationRecord | None:
+        """Return latest application whose confirmed meeting link matches exactly."""
+
+        normalized_link = meeting_link.strip().rstrip("/").casefold()
+        if not normalized_link:
+            return None
+
+        async with self._session_factory() as session:
+            stmt = (
+                select(ApplicantApplication)
+                .where(
+                    ApplicantApplication.interview_schedule_options.is_not(None),
+                    func.lower(
+                        func.rtrim(
+                            func.jsonb_extract_path_text(
+                                ApplicantApplication.interview_schedule_options,
+                                "confirmed_meeting_link",
+                            ),
+                            "/",
+                        )
+                    )
+                    == normalized_link,
+                )
+                .order_by(ApplicantApplication.updated_at.desc())
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            entity = result.scalar_one_or_none()
+            if entity is None:
+                return None
+            return self._to_record(entity)
+
     async def update_parse_state(
         self,
         *,

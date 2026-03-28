@@ -172,6 +172,31 @@ class LocalApplicationRepository(ApplicationRepository):
         matched.sort(key=lambda record: record.created_at, reverse=True)
         return matched[0]
 
+    async def get_by_confirmed_meeting_link(self, *, meeting_link: str) -> ApplicationRecord | None:
+        """Return latest local application with matching confirmed meeting link."""
+
+        target = meeting_link.strip().rstrip("/").casefold()
+        if not target:
+            return None
+
+        raw_records = await asyncio.to_thread(self._read_records_sync)
+        matched: list[ApplicationRecord] = []
+        for item in raw_records:
+            payload = item.get("interview_schedule_options")
+            if not isinstance(payload, dict):
+                continue
+            stored_link = payload.get("confirmed_meeting_link")
+            if not isinstance(stored_link, str):
+                continue
+            if stored_link.strip().rstrip("/").casefold() != target:
+                continue
+            matched.append(ApplicationRecord.model_validate(item))
+
+        if not matched:
+            return None
+        matched.sort(key=lambda record: record.created_at, reverse=True)
+        return matched[0]
+
     async def update_parse_state(
         self,
         *,

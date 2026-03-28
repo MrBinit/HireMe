@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from app.core.settings import get_settings
 
@@ -34,6 +34,28 @@ class JobOpeningRuntimeConfig(BaseModel):
 
 class ApplicationRuntimeConfig(BaseModel):
     """Config options for candidate application validation."""
+
+    class WebhookAsyncRuntimeConfig(BaseModel):
+        """Runtime config for durable queue-backed webhook side effects."""
+
+        enabled: bool = True
+        use_queue: bool = True
+        provider: Literal["sqs", "local"] = "sqs"
+        region: str = "us-east-1"
+        queue_name: str = "hireme-webhook-events"
+        queue_url: str | None = None
+        enqueue_timeout_seconds: float = 2.0
+        worker_concurrency: int = 4
+        max_in_flight_per_worker: int = 8
+        receive_batch_size: int = 10
+        receive_wait_seconds: int = 20
+        visibility_timeout_seconds: int = 300
+        max_receive_count: int = 5
+        queue_depth_warning_threshold: int = 500
+        queue_depth_reject_threshold: int = 2000
+        reject_when_queue_depth_exceeded: bool = False
+        queue_depth_cache_seconds: int = 5
+        idempotency_processing_lock_seconds: int = 180
 
     allowed_resume_extensions: list[str] = Field(default_factory=lambda: [".pdf", ".doc", ".docx"])
     allowed_resume_content_types: list[str] = Field(
@@ -65,11 +87,15 @@ class ApplicationRuntimeConfig(BaseModel):
     initial_screening_fail_reason: str = "Candidate failed in initial screening."
     ai_score_fail_reason: str = "Candidate did not meet the AI score threshold."
     ai_score_threshold: float = 70.0
+    ai_score_manual_review_min: float = 65.0
+    ai_score_manual_review_max: float = 75.0
+    ai_score_auto_decision_min_confidence: float = 0.7
     prefilter_min_keyword_length: int = 3
     prefilter_max_keywords: int = 24
     prefilter_min_keyword_matches: int = 5
     prefilter_min_skill_matches: int = 5
     prefilter_max_search_text_chars: int = 8000
+    prefilter_enforce_max_years: bool = False
     prefilter_stop_words: list[str] = Field(
         default_factory=lambda: [
             "and",
@@ -95,6 +121,7 @@ class ApplicationRuntimeConfig(BaseModel):
     )
     manager_selection_template: str = ""
     slack_invite_fallback_join_url: str = ""
+    webhook_async: WebhookAsyncRuntimeConfig = Field(default_factory=WebhookAsyncRuntimeConfig)
 
 
 class StorageRuntimeConfig(BaseModel):
@@ -490,7 +517,10 @@ class SchedulingRuntimeConfig(BaseModel):
         """Runtime config for post-interview transcript/summary sync from Fireflies."""
 
         enabled: bool = False
-        mock_mode: bool = False
+        demo_mode: bool = Field(
+            default=False,
+            validation_alias=AliasChoices("demo_mode", "mock_mode"),
+        )
         api_url: str = "https://api.fireflies.ai/graphql"
         owner_email: str | None = None
         request_timeout_seconds: float = 15.0
@@ -506,6 +536,12 @@ class SchedulingRuntimeConfig(BaseModel):
         max_transcript_pages: int = 3
         update_schedule_status_on_complete: bool = True
         completed_schedule_status: str = "interview_done"
+
+        @property
+        def mock_mode(self) -> bool:
+            """Backward-compatible alias for legacy mock_mode key."""
+
+            return bool(self.demo_mode)
 
     enabled: bool = True
     use_queue: bool = True

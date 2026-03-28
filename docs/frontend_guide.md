@@ -60,6 +60,10 @@ From `frontend/package.json`:
     - Prior offices/roles
     - Key responsibilities/achievements
   - Status history timeline
+  - Human screening decision controls for manual-review candidates:
+    - Move Ahead (sets `shortlisted`)
+    - Don't Move Ahead (sets `rejected`)
+    - Optional decision note
   - Manual review/override form for admin updates
 
 ## 3) Backend API Endpoints Used by Frontend
@@ -71,6 +75,7 @@ From `frontend/package.json`:
 - `GET /api/v1/admin/candidates`
 - `GET /api/v1/admin/candidates/{id}`
 - `GET /api/v1/admin/candidates/{id}/resume-download`
+- `PATCH /api/v1/admin/candidates/{id}/status`
 - `PATCH /api/v1/admin/candidates/{id}/review`
 - `POST /api/v1/admin/candidates/{id}/evaluate`
 - `POST /api/v1/admin/candidates/{id}/evaluate/queue` (alias)

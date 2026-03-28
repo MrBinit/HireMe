@@ -150,6 +150,24 @@ class GoogleCalendarClient:
             extended_private_properties or {},
         )
 
+    async def get_attendee_response_status(
+        self,
+        *,
+        calendar_id: str,
+        delegated_user: str | None,
+        event_id: str,
+        attendee_email: str,
+    ) -> str | None:
+        """Return attendee response status from one confirmed calendar event."""
+
+        return await anyio.to_thread.run_sync(
+            self._get_attendee_response_status_sync,
+            calendar_id,
+            delegated_user,
+            event_id,
+            attendee_email,
+        )
+
     def _resolve_auth_mode(self) -> tuple[str, dict[str, Any] | None]:
         """Resolve active auth mode and any credential object for that mode."""
 
@@ -489,6 +507,43 @@ class GoogleCalendarClient:
             end_at=end_at,
             meeting_link=meeting_link,
         )
+
+    def _get_attendee_response_status_sync(
+        self,
+        calendar_id: str,
+        delegated_user: str | None,
+        event_id: str,
+        attendee_email: str,
+    ) -> str | None:
+        """Blocking call to fetch attendee RSVP state for one event."""
+
+        service = self._build_service(delegated_user)
+        try:
+            response = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        except Exception as exc:
+            raise GoogleCalendarApiError(
+                f"failed to fetch attendee response for event {event_id} in {calendar_id}"
+            ) from exc
+
+        attendees = response.get("attendees")
+        if not isinstance(attendees, list):
+            return None
+
+        target = attendee_email.strip().casefold()
+        if not target:
+            return None
+
+        for item in attendees:
+            if not isinstance(item, dict):
+                continue
+            email_value = str(item.get("email") or "").strip().casefold()
+            if email_value != target:
+                continue
+            response_status = item.get("responseStatus")
+            if isinstance(response_status, str) and response_status.strip():
+                return response_status.strip().lower()
+            return None
+        return None
 
     @staticmethod
     def _parse_google_datetime(value: str) -> datetime:

@@ -1,10 +1,20 @@
 """Schema models for candidate application payloads and responses."""
 
 from datetime import date, datetime
+import json
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
 
 ParseStatus = Literal["pending", "in_progress", "completed", "failed"]
 EvaluationStatus = Literal["queued", "in_progress", "completed", "failed"]
@@ -34,7 +44,7 @@ class ApplicationCreatePayload(BaseModel):
     email: EmailStr
     linkedin_url: AnyHttpUrl
     portfolio_url: AnyHttpUrl | None = None
-    github_url: AnyHttpUrl
+    github_url: AnyHttpUrl | None = None
     twitter_url: AnyHttpUrl | None = None
     role_selection: str = Field(min_length=2, max_length=120)
 
@@ -68,6 +78,135 @@ class ManagerSelectionDetails(BaseModel):
     equity_or_bonus: str | None = Field(default=None, max_length=400)
     reporting_manager: str = Field(min_length=2, max_length=160)
     custom_terms: str | None = Field(default=None, max_length=2000)
+
+
+class ResearchProvenanceEntry(BaseModel):
+    """One claim provenance row with evidence reference paths."""
+
+    claim: str | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchIssueFlag(BaseModel):
+    """One discrepancy/issue flag row for manager review."""
+
+    type: str | None = None
+    severity: str | None = None
+    source: str | None = None
+    details: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchLlmIssue(BaseModel):
+    """One issue row from LLM analysis payload."""
+
+    type: str | None = None
+    severity: str | None = None
+    evidence: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchLlmAnalysis(BaseModel):
+    """Normalized LLM analysis block persisted in research summary."""
+
+    source: str | None = None
+    model_id: str | None = None
+    summary: str | None = None
+    confidence: str | None = None
+    issues: list[ResearchLlmIssue] = Field(default_factory=list)
+    provenance: list[ResearchProvenanceEntry] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchDeterministicChecks(BaseModel):
+    """Non-LLM quality checks used for confidence routing."""
+
+    has_minimum_public_evidence: bool | None = None
+    manual_review_required: bool | None = None
+    confidence_baseline: str | None = None
+    high_severity_issue_count: int | None = None
+    notes: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchHit(BaseModel):
+    """One source hit row used for evidence link rendering."""
+
+    title: str | None = None
+    link: str | None = None
+    snippet: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchGithubRepo(BaseModel):
+    """One compact GitHub repository row from research summary."""
+
+    name: str | None = None
+    html_url: str | None = None
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchLinkedinExtractor(BaseModel):
+    """LinkedIn extractor subset for UI and auditing."""
+
+    matched_profile_url: str | None = None
+    top_hits: list[ResearchHit] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchGithubExtractor(BaseModel):
+    """GitHub extractor subset for UI and auditing."""
+
+    profile_url: str | None = None
+    top_repositories: list[ResearchGithubRepo] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchPortfolioExtractor(BaseModel):
+    """Portfolio extractor subset for UI and auditing."""
+
+    matched_portfolio_url: str | None = None
+    top_hits: list[ResearchHit] = Field(default_factory=list)
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchExtractors(BaseModel):
+    """Extractor envelope persisted in research summary payload."""
+
+    linkedin: ResearchLinkedinExtractor | None = None
+    github: ResearchGithubExtractor | None = None
+    portfolio: ResearchPortfolioExtractor | None = None
+    model_config = ConfigDict(extra="ignore")
+
+
+class ResearchSummary(BaseModel):
+    """Typed representation of online_research_summary JSON."""
+
+    brief: str | None = None
+    discrepancies: list[str] = Field(default_factory=list)
+    issue_flags: list[ResearchIssueFlag] = Field(default_factory=list)
+    deterministic_checks: ResearchDeterministicChecks | None = None
+    llm_analysis: ResearchLlmAnalysis | None = None
+    extractors: ResearchExtractors | None = None
+    model_config = ConfigDict(extra="ignore")
+
+
+def parse_research_summary_json(value: str | None) -> ResearchSummary | None:
+    """Parse persisted research JSON into typed model when possible."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return ResearchSummary.model_validate(payload)
+    except ValidationError:
+        return None
 
 
 class ApplicationRecord(BaseModel):
@@ -130,6 +269,13 @@ class ApplicationRecord(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def research_summary(self) -> ResearchSummary | None:
+        """Expose typed research summary derived from persisted JSON string."""
+
+        return parse_research_summary_json(self.online_research_summary)
 
 
 class ApplicationListResponse(BaseModel):
@@ -241,3 +387,15 @@ class ManagerDecisionPayload(BaseModel):
         if self.decision == "reject" and self.selection_details is not None:
             raise ValueError("selection_details are allowed only when decision=select")
         return self
+
+
+class FirefliesDemoPayload(BaseModel):
+    """Admin payload to simulate transcript completion state for demo flows."""
+
+    mock_completed: bool = Field(
+        default=True,
+        description=(
+            "When true, force transcript completed + interview_done with fake transcript data. "
+            "When false, force transcript processing state with no transcript content."
+        ),
+    )

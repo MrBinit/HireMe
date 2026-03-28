@@ -78,10 +78,11 @@ class InterviewHoldExpiryWorker:
     async def run_once(self) -> int:
         """Release expired holds for one polling cycle."""
 
+        calendar_invite_count = await self._sync_calendar_invite_responses()
         fireflies_count = await self._sync_fireflies_transcripts()
         reminder_count = await self._send_pending_reminders()
         if not self._config.auto_release_expired_holds:
-            return fireflies_count + reminder_count
+            return calendar_invite_count + fireflies_count + reminder_count
 
         now_utc = datetime.now(tz=timezone.utc)
         application_ids = await self._fetch_expired_application_ids(now_utc=now_utc)
@@ -97,7 +98,27 @@ class InterviewHoldExpiryWorker:
                     "failed to release expired holds for application_id=%s",
                     application_id,
                 )
-        return fireflies_count + reminder_count + released
+        return calendar_invite_count + fireflies_count + reminder_count + released
+
+    async def _sync_calendar_invite_responses(self) -> int:
+        """Sync booked-candidate calendar RSVP state from Google attendee responses."""
+
+        application_ids = await self._fetch_calendar_rsvp_sync_application_ids()
+        updated = 0
+        for application_id in application_ids:
+            try:
+                if await self._scheduling_service.sync_calendar_invite_response(
+                    application_id=application_id
+                ):
+                    updated += 1
+            except Exception:
+                logger.exception(
+                    "failed to sync calendar RSVP state for application_id=%s",
+                    application_id,
+                )
+        if updated:
+            logger.info("calendar RSVP sync cycle completed updated=%s", updated)
+        return updated
 
     async def _send_pending_reminders(self) -> int:
         """Send one follow-up reminder to candidates with unconfirmed held slots."""
@@ -240,7 +261,7 @@ class InterviewHoldExpiryWorker:
             fireflies_state["transcript_sync"] = transcript_sync
 
             sync_status = str(transcript_sync.get("status") or "pending").strip().lower()
-            if self._config.fireflies.mock_mode and sync_status != "completed":
+            if self._config.fireflies.demo_mode and sync_status != "completed":
                 fireflies_state["status"] = "completed"
                 fireflies_state["completed_at"] = now_utc.isoformat()
                 transcript_sync["status"] = "completed"
@@ -301,7 +322,7 @@ class InterviewHoldExpiryWorker:
                 or should_retry_requested_during_live_window
             )
             if (
-                not self._config.fireflies.mock_mode
+                not self._config.fireflies.demo_mode
                 and within_live_window
                 and allow_join_for_status
                 and can_retry_join
@@ -335,7 +356,7 @@ class InterviewHoldExpiryWorker:
             )
             max_poll_attempts = max(1, self._config.fireflies.max_poll_attempts)
             should_poll = (
-                not self._config.fireflies.mock_mode
+                not self._config.fireflies.demo_mode
                 and now_utc >= transcript_ready_at
                 and sync_status not in {"completed", "not_found"}
                 and sync_attempts < max_poll_attempts
@@ -516,6 +537,26 @@ class InterviewHoldExpiryWorker:
                 select(ApplicantApplication.id)
                 .where(
                     ApplicantApplication.interview_schedule_status == self._config.booked_status,
+                    ApplicantApplication.interview_schedule_options.is_not(None),
+                )
+                .order_by(ApplicantApplication.updated_at.desc())
+                .limit(max(1, self._config.fireflies.batch_size))
+            )
+            rows = await session.execute(stmt)
+            return [row[0] for row in rows.all()]
+
+    async def _fetch_calendar_rsvp_sync_application_ids(self) -> list[UUID]:
+        """Return candidate ids eligible for Google Calendar RSVP sync."""
+
+        target_statuses = {
+            self._config.booked_status,
+            self._config.fireflies.completed_schedule_status,
+        }
+        async with self._session_factory() as session:
+            stmt = (
+                select(ApplicantApplication.id)
+                .where(
+                    ApplicantApplication.interview_schedule_status.in_(list(target_statuses)),
                     ApplicantApplication.interview_schedule_options.is_not(None),
                 )
                 .order_by(ApplicantApplication.updated_at.desc())

@@ -10,7 +10,11 @@ from uuid import uuid4
 from app.core.error import ApplicationValidationError
 from app.infra.sqs_queue import SqsMessage
 from app.schemas.application import ApplicationRecord, ResumeFileMeta
-from app.schemas.evaluation import CandidateEvaluationResult, EvaluationBreakdown
+from app.schemas.evaluation import (
+    CandidateEvaluationResult,
+    EvaluationBreakdown,
+    EvaluationEvidence,
+)
 from app.scripts.sqs_evaluation_worker import SqsEvaluationWorker
 from app.services.research_queue import CandidateResearchEnrichmentJob
 
@@ -59,8 +63,16 @@ class _FakeQueueClient:
 class _FakeEvaluator:
     """Evaluator fake returning deterministic score."""
 
-    def __init__(self, score: float) -> None:
+    def __init__(
+        self,
+        score: float,
+        *,
+        confidence: float = 0.9,
+        needs_human_review: bool = False,
+    ) -> None:
         self.score = score
+        self.confidence = confidence
+        self.needs_human_review = needs_human_review
 
     async def evaluate_application(self, *, application_id):
         _ = application_id
@@ -72,6 +84,14 @@ class _FakeEvaluator:
                 education=min(10.0, self.score * 0.1),
                 role_alignment=min(20.0, self.score * 0.2),
             ),
+            evidence=EvaluationEvidence(
+                skills=["Skill evidence"],
+                experience=["Experience evidence"],
+                education=["Education evidence"],
+                role_alignment=["Role alignment evidence"],
+            ),
+            confidence=float(self.confidence),
+            needs_human_review=bool(self.needs_human_review),
             reason="Deterministic score for tests.",
         )
 
@@ -186,6 +206,46 @@ def test_evaluation_worker_does_not_queue_research_when_score_is_below_threshold
 
         assert research_queue.jobs == []
         assert queue_client.deleted_receipt_handles == ["r2"]
+
+    asyncio.run(run())
+
+
+def test_evaluation_worker_routes_borderline_score_to_manual_review() -> None:
+    """Borderline score should be routed to manual review and skip research queue."""
+
+    async def run() -> None:
+        candidate = _build_candidate(applicant_status="screened")
+        queue_client = _FakeQueueClient()
+        app_repo = _FakeApplicationRepository(candidate)
+        research_queue = _FakeResearchQueuePublisher()
+        worker = SqsEvaluationWorker(
+            queue_client=queue_client,  # type: ignore[arg-type]
+            evaluator=_FakeEvaluator(71.0, confidence=0.92),  # type: ignore[arg-type]
+            application_repository=app_repo,  # type: ignore[arg-type]
+            research_queue_publisher=research_queue,  # type: ignore[arg-type]
+            research_queue_enabled=True,
+            research_target_statuses={"shortlisted"},
+            research_enqueue_timeout_seconds=1.0,
+            ai_score_threshold=70.0,
+            max_in_flight=1,
+            receive_batch_size=1,
+            receive_wait_seconds=1,
+            visibility_timeout_seconds=30,
+        )
+
+        message = SqsMessage(
+            message_id="e2b",
+            receipt_handle="r2b",
+            body=json.dumps({"application_id": str(candidate.id)}),
+        )
+        await worker._process_message(message)
+
+        assert research_queue.jobs == []
+        assert queue_client.deleted_receipt_handles == ["r2b"]
+        assert app_repo.record.applicant_status == "screened"
+        assert app_repo.record.rejection_reason is None
+        assert app_repo.record.ai_score == 71.0
+        assert "manual_review_reasons=score_band" in (app_repo.record.ai_screening_summary or "")
 
     asyncio.run(run())
 

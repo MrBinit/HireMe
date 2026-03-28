@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, String, Uuid, func
+from sqlalchemy import JSON, Boolean, DateTime, Index, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.model.base import Base
@@ -40,3 +40,10 @@ class JobOpening(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+Index(
+    "uq_job_openings_role_title_ci",
+    func.lower(JobOpening.role_title),
+    unique=True,
+)

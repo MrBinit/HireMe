@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import FastAPI
+from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
 
 from app.api.deps import (
@@ -98,22 +99,32 @@ class _FakeApplicationService:
 class _FakeReferenceService:
     """Minimal reference service for referee endpoint tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, application_id, candidate_email: str) -> None:
         self.items: list[ReferenceRecord] = []
+        self._application_id = application_id
+        self._candidate_email = candidate_email
 
-    async def create(self, payload):
+    async def create_from_referee(self, payload):
+        applicant_email = str(payload.applicant_email).strip().casefold()
+        if applicant_email != self._candidate_email.strip().casefold():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Sorry, no applicant found with this email.",
+            )
         record = ReferenceRecord(
             id=uuid4(),
-            application_id=payload.application_id,
-            candidate_email=payload.candidate_email,
+            application_id=self._application_id,
+            candidate_email=self._candidate_email,
+            candidate_name=payload.applicant_name,
+            candidate_position=payload.applicant_position,
             referee_name=payload.referee_name,
             referee_email=payload.referee_email,
-            referee_phone=payload.referee_phone,
-            referee_linkedin_url=payload.referee_linkedin_url,
-            referee_company=payload.referee_company,
-            referee_position=payload.referee_position,
-            relationship=payload.relationship,
-            notes=payload.notes,
+            referee_phone=None,
+            referee_linkedin_url=None,
+            referee_company=None,
+            referee_position=None,
+            relationship=None,
+            notes=payload.referee_note,
             created_at=datetime.now(tz=timezone.utc),
         )
         self.items.append(record)
@@ -153,7 +164,10 @@ def _build_client() -> tuple[TestClient, _FakeApplicationService, _FakeReference
     app = FastAPI()
     app.include_router(referee_router, prefix="/api/v1")
     fake_app_service = _FakeApplicationService()
-    fake_reference_service = _FakeReferenceService()
+    fake_reference_service = _FakeReferenceService(
+        application_id=fake_app_service._record.id,
+        candidate_email=fake_app_service._record.email,
+    )
     app.dependency_overrides[get_application_service_dep] = lambda: fake_app_service
     app.dependency_overrides[get_reference_service_dep] = lambda: fake_reference_service
     return TestClient(app), fake_app_service, fake_reference_service
@@ -201,12 +215,12 @@ def test_referee_can_list_candidates_and_submit_reference(monkeypatch) -> None:
         "/api/v1/referee/references",
         headers=headers,
         json={
-            "application_id": str(fake_app_service._record.id),
-            "candidate_email": fake_app_service._record.email,
+            "applicant_email": fake_app_service._record.email,
+            "applicant_name": fake_app_service._record.full_name,
+            "applicant_position": fake_app_service._record.role_selection,
             "referee_name": "Referee One",
             "referee_email": "ref1@example.com",
-            "relationship": "Former manager",
-            "notes": "Strong ownership and delivery.",
+            "referee_note": "Strong referral from prior project collaboration.",
         },
     )
     assert create_response.status_code == 201
@@ -220,3 +234,36 @@ def test_referee_can_list_candidates_and_submit_reference(monkeypatch) -> None:
     assert references_response.status_code == 200
     refs_body = references_response.json()
     assert refs_body["total"] == 1
+
+
+def test_referee_submit_reference_returns_not_found_for_unknown_applicant_email(
+    monkeypatch,
+) -> None:
+    """Referee submission should return clear error when applicant email does not exist."""
+
+    _set_referee_test_env(monkeypatch)
+    _reset_cached_config()
+    client, _, _ = _build_client()
+
+    login_response = client.post(
+        "/api/v1/referee/login",
+        json={"username": "referee", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/v1/referee/references",
+        headers=headers,
+        json={
+            "applicant_email": "missing@example.com",
+            "applicant_name": "Missing Person",
+            "applicant_position": "Backend Engineer",
+            "referee_name": "Referee One",
+            "referee_email": "ref1@example.com",
+            "referee_note": "I recommend this candidate.",
+        },
+    )
+    assert create_response.status_code == 422
+    body = create_response.json()
+    assert body["detail"] == "Sorry, no applicant found with this email."

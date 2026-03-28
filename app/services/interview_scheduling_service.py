@@ -304,8 +304,8 @@ class InterviewSchedulingService:
             updated_payload["confirmed_start_at"] = confirmed_event.start_at.isoformat()
             updated_payload["confirmed_end_at"] = confirmed_event.end_at.isoformat()
             updated_payload["confirmed_manager_email"] = manager_email
-            updated_payload["calendar_invite_response_status"] = "accepted"
-            updated_payload["calendar_invite_response_source"] = "assumed_by_system"
+            updated_payload["calendar_invite_response_status"] = "needs_action"
+            updated_payload["calendar_invite_response_source"] = "calendar_invite_sent"
             updated_payload["calendar_invite_response_at"] = now_utc.isoformat()
             updated_payload["released_hold_event_ids"] = released_event_ids
             if self._fireflies_service and self._fireflies_service.should_track_manager(
@@ -913,8 +913,8 @@ class InterviewSchedulingService:
             payload["confirmed_start_at"] = confirmed_event.start_at.isoformat()
             payload["confirmed_end_at"] = confirmed_event.end_at.isoformat()
             payload["confirmed_manager_email"] = manager_email
-            payload["calendar_invite_response_status"] = "accepted"
-            payload["calendar_invite_response_source"] = "assumed_by_system"
+            payload["calendar_invite_response_status"] = "needs_action"
+            payload["calendar_invite_response_source"] = "calendar_invite_sent"
             payload["calendar_invite_response_at"] = now_utc.isoformat()
             payload["released_hold_event_ids"] = released_event_ids
             payload["reschedule"] = {
@@ -1148,6 +1148,77 @@ class InterviewSchedulingService:
             slot_option_links=links,
             reject_link=reject_link,
         )
+
+    async def sync_calendar_invite_response(self, *, application_id: UUID) -> bool:
+        """Sync candidate RSVP state from Google Calendar invite attendee response."""
+
+        candidate = await self._application_repository.get_by_id(application_id)
+        if candidate is None:
+            return False
+
+        payload = candidate.interview_schedule_options
+        if not isinstance(payload, dict) or not payload:
+            return False
+
+        confirmed_event_id = payload.get("confirmed_event_id")
+        if not isinstance(confirmed_event_id, str) or not confirmed_event_id.strip():
+            return False
+
+        manager_email = payload.get("confirmed_manager_email")
+        if not isinstance(manager_email, str) or "@" not in manager_email:
+            manager_email = payload.get("manager_email")
+        if not isinstance(manager_email, str) or "@" not in manager_email:
+            manager_email = candidate.interview_calendar_email
+        if not isinstance(manager_email, str) or "@" not in manager_email:
+            return False
+
+        delegated_user = self._delegated_user_for_manager(manager_email)
+        try:
+            response_status = await self._calendar_client.get_attendee_response_status(
+                calendar_id=manager_email,
+                delegated_user=delegated_user,
+                event_id=confirmed_event_id,
+                attendee_email=str(candidate.email),
+            )
+        except GoogleCalendarApiError:
+            logger.exception(
+                "failed to sync calendar attendee response application_id=%s event_id=%s",
+                application_id,
+                confirmed_event_id,
+            )
+            return False
+
+        normalized_status = ""
+        if isinstance(response_status, str) and response_status.strip():
+            raw_status = response_status.strip().lower()
+            normalized_status = "needs_action" if raw_status == "needsaction" else raw_status
+        if normalized_status not in {"accepted", "declined", "tentative", "needs_action"}:
+            return False
+
+        previous_status = str(payload.get("calendar_invite_response_status") or "").strip().lower()
+        previous_source = str(payload.get("calendar_invite_response_source") or "").strip().lower()
+        if previous_status == normalized_status and previous_source == "google_calendar":
+            return False
+
+        now_utc = datetime.now(tz=timezone.utc)
+        updated_payload = dict(payload)
+        updated_payload["calendar_invite_response_status"] = normalized_status
+        updated_payload["calendar_invite_response_source"] = "google_calendar"
+        updated_payload["calendar_invite_response_at"] = now_utc.isoformat()
+
+        updates: dict[str, Any] = {
+            "interview_schedule_options": updated_payload,
+        }
+        if normalized_status == "declined":
+            updates["interview_schedule_error"] = "candidate declined Google Calendar invite"
+        elif normalized_status == "accepted":
+            updates["interview_schedule_error"] = None
+
+        await self._application_repository.update_admin_review(
+            application_id=application_id,
+            updates=updates,
+        )
+        return True
 
     def _compute_time_window(self, now_utc: datetime) -> tuple[datetime, datetime]:
         """Return UTC window bounds for next N business days."""

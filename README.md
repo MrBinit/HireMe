@@ -42,6 +42,10 @@ This project includes:
 6. Run backend/worker services on EC2; run frontend service on EC2 as frontend origin.
 7. Route frontend traffic through CloudFront (EC2 frontend origin) for edge delivery.
 
+## Database migration policy
+- PostgreSQL schema evolution is migration-driven via Alembic (`alembic upgrade head`).
+- Application startup does not run PostgreSQL schema patch DDL/DML.
+
 ## AI Tools and Models Used
 - Primary LLM tasks (screening/research synthesis): AWS Bedrock primary model
 - Secondary LLM tasks (cost-optimized summarization/welcome): AWS Bedrock fallback model
@@ -70,8 +74,8 @@ This project includes:
 - GitHub API:
   - Repository/activity/language extraction for profile enrichment
 - X/Twitter API (v2):
-  - Best-effort profile/post extraction when handle is available
-  - Falls back safely when identity resolution is weak or API data is unavailable
+  - Standalone extractor exists for handle-based extraction
+  - Shortlisted strict enrichment pipeline intentionally uses deterministic Twitter mock output
 
 ## How Each Major Integration Works
 1. Application + screening:
@@ -81,8 +85,18 @@ This project includes:
 - If pre-filter passes, LLM score is computed; threshold controls shortlist.
 
 2. Research enrichment:
-- For shortlisted candidates, enrichment workers gather LinkedIn/X/GitHub/portfolio evidence.
+- For shortlisted candidates, enrichment workers gather LinkedIn/GitHub/portfolio evidence plus a
+  deterministic Twitter mock block.
 - System cross-checks against resume and generates discrepancies + 3-5 sentence brief.
+- LLM synthesis receives curated/sanitized evidence only and returns confidence + provenance refs.
+- API returns both:
+  - `online_research_summary` (legacy raw JSON string)
+  - `research_summary` (validated typed nested object for safe consumers)
+- Confidence gate behavior:
+  - if `manual_review_required=true` or confidence is `low`, candidate is routed to explicit reviewer path
+  - scheduling queue endpoint blocks until reviewer action
+- Research worker emits quality telemetry counters (manual review, low confidence, high severity flags,
+  parse failures, fallback-model usage).
 
 3. Scheduling:
 - System finds 3-5 manager slots (45 min) in next business window.
@@ -103,10 +117,13 @@ This project intentionally made trade-offs to deliver a working end-to-end syste
 1. Pre-filter before LLM scoring
 - What we changed:
   - Added deterministic prefilter gates before LLM scoring (`prefilter_min_*`, keyword/skill matches, bounded prefilter text).
+  - Screening now uses token/phrase matching (with small canonical aliases like `js -> javascript`) instead of raw substring checks.
+  - Requirements are split into must-have vs nice-to-have; first-layer gating uses must-have set.
+  - Experience gate enforces minimum years and treats maximum years as configurable (`prefilter_enforce_max_years`, default `false`).
 - Why:
   - To reduce LLM cost, lower queue pressure, and speed up screening.
 - Trade-off:
-  - Some strong but non-standard profiles can be filtered out early (false negatives).
+  - Some strong but non-standard profiles can still be filtered out early (false negatives), though max-years false rejects are reduced by default.
 
 2. Smaller/secondary model for selected AI tasks
 - What we changed:
@@ -136,17 +153,45 @@ This project intentionally made trade-offs to deliver a working end-to-end syste
 | Integration | Current State | Why | Production Plan |
 | --- | --- | --- | --- |
 | Fireflies transcript retrieval | Real integration with fallback/mock summary when transcript payload is incomplete | Avoid blocking interview pipeline on unreliable transcript fields | Webhook-first transcript ID matching + stronger retries + strict real-transcript completion |
-| X/Twitter enrichment in shortlist pipeline | Best-effort extraction with safe fallback payloads when handle confidence/data is weak | Avoid false profile attribution and noisy unsupported claims | Stronger identity confidence scoring and evidence-grounded extraction |
+| X/Twitter enrichment in shortlist pipeline | Deterministic mock block only (`mode=mock`) in strict orchestrated flow | Avoid false profile attribution and unsupported claims from weak identity resolution | Re-enable only with verified handle/URL confidence checks and evidence grounding |
 | Slack admin invite in restricted workspaces | API invite may fail on token limitations; fallback invite-link email is used | Keep onboarding unblocked without enterprise admin token guarantees | Workspace-admin token hardening + deterministic invite API success path |
 
 ## Known Limitations
 - LLM score is not perfectly consistent run-to-run.
 - LLM dependencies can introduce hallucination risk when external evidence is noisy.
 - Research payloads from LinkedIn/X/GitHub can become large/noisy and lose signal after trimming.
-- Some flows still rely on broad scans where incremental/indexed patterns are needed for scale.
-- Proper backpressure controls are not fully implemented across all queue + LLM paths.
+- Some legacy flows still rely on broad scans where incremental/indexed patterns are needed for scale.
+- Queue-depth-aware backpressure is implemented for webhook queue; broader queue autoscaling/alerting is still infrastructure-dependent.
 - A robust LLM circuit-breaker strategy is not fully implemented yet.
 - Full load testing/performance characterization has not been completed yet.
+
+## Review-Critical Improvements (Implemented)
+These hardening items are now in place for review:
+
+1. Durable background processing for webhook and deferred email side effects
+- Slack `team_join`, Fireflies transcript completion, and application confirmation email are now queued as durable SQS jobs.
+- New worker: `app.scripts.sqs_webhook_event_worker`.
+
+2. Idempotency for external webhook retries
+- Added `processed_webhook_events` store with claim/complete/fail state transitions.
+- Worker enforces idempotency before running side effects.
+
+3. Fireflies deterministic candidate mapping (no API-side full scan fallback)
+- Fireflies processing now resolves candidates via direct confirmed-meeting-link lookup only.
+- Added normalized/indexed meeting-link lookup path in repository/database.
+
+4. Queue observability + backpressure controls
+- Added queue-depth checks on webhook enqueue with warning/reject thresholds.
+- Added periodic worker telemetry logs (success/failure/duplicates + queue depth).
+
+5. Deferred async behavior tests
+- Added tests for Slack deferred enqueue, Fireflies fast-ACK enqueue, and webhook worker idempotent processing paths.
+
+6. Repository hygiene
+- Duplicate `* 2.*` artifact files were removed.
+
+Remaining recommendation:
+- add DLQ replay automation/runbook (DLQ wiring is deployment-specific and should be enabled in infrastructure).
 
 ## Requirement Deviations and Rationale
 | Requirement Area | Current Behavior | Rationale / Note |

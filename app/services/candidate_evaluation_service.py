@@ -53,6 +53,10 @@ class CandidateEvaluationService:
         """Evaluate one candidate profile against the mapped job opening."""
 
         candidate, opening = await self._load_candidate_and_opening(application_id=application_id)
+        must_have_skills, nice_to_have_skills = self._split_requirements_by_priority(
+            opening.requirements
+        )
+        required_skills = [*must_have_skills, *nice_to_have_skills]
 
         prompt = self._build_prompt(
             candidate_parse_result=candidate.parse_result,
@@ -60,7 +64,9 @@ class CandidateEvaluationService:
                 candidate.parse_result.get("work_experience")
             ),
             role=opening.role_title,
-            required_skills=opening.requirements,
+            required_skills=required_skills,
+            must_have_skills=must_have_skills,
+            nice_to_have_skills=nice_to_have_skills,
             min_exp=self._parse_experience_range(opening.experience_range)[0],
             max_exp=self._parse_experience_range(opening.experience_range)[1],
             job_description="; ".join([*opening.responsibilities, *opening.requirements]),
@@ -261,6 +267,8 @@ class CandidateEvaluationService:
         work_summary: str,
         role: str,
         required_skills: list[str],
+        must_have_skills: list[str],
+        nice_to_have_skills: list[str],
         min_exp: int | None,
         max_exp: int | None,
         job_description: str,
@@ -275,6 +283,10 @@ class CandidateEvaluationService:
         skills = self._render_skills(candidate_parse_result.get("skills"))
         education = self._render_education(candidate_parse_result.get("education"))
         required_skills_text = ", ".join(required_skills) if required_skills else "not available"
+        must_have_skills_text = ", ".join(must_have_skills) if must_have_skills else "not available"
+        nice_to_have_skills_text = (
+            ", ".join(nice_to_have_skills) if nice_to_have_skills else "not available"
+        )
 
         replacements = {
             "{skills}": skills,
@@ -283,6 +295,8 @@ class CandidateEvaluationService:
             "{education}": education,
             "{role}": role or "not available",
             "{required_skills}": required_skills_text,
+            "{must_have_skills}": must_have_skills_text,
+            "{nice_to_have_skills}": nice_to_have_skills_text,
             "{min_exp}": str(min_exp) if min_exp is not None else "unknown",
             "{max_exp}": str(max_exp) if max_exp is not None else "unknown",
             "{job_description}": job_description or "not available",
@@ -379,13 +393,78 @@ class CandidateEvaluationService:
         return lower, upper
 
     @staticmethod
+    def _split_requirements_by_priority(requirements: list[str]) -> tuple[list[str], list[str]]:
+        """Split requirement bullets into must-have and nice-to-have lists."""
+
+        must_have: list[str] = []
+        nice_to_have: list[str] = []
+
+        for raw in requirements:
+            if not isinstance(raw, str):
+                continue
+            cleaned = " ".join(raw.split()).strip()
+            if not cleaned:
+                continue
+
+            label_match = re.match(
+                r"^(must(?:\s+have)?|required|requirement|required skill|"
+                r"nice(?:\s+to\s+have)?|preferred|optional|plus)\s*[:\-]\s*(.+)$",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+            if label_match:
+                label = label_match.group(1).casefold()
+                content = " ".join(label_match.group(2).split()).strip()
+                if not content:
+                    continue
+                if label in {"nice", "nice to have", "preferred", "optional", "plus"}:
+                    nice_to_have.append(content)
+                else:
+                    must_have.append(content)
+                continue
+
+            lowered = cleaned.casefold()
+            if re.match(r"^(nice(?:\s+to\s+have)?|preferred|optional|plus)\b", lowered):
+                content = re.sub(
+                    r"^(nice(?:\s+to\s+have)?|preferred|optional|plus)\b",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                ).lstrip(" :-")
+                nice_to_have.append(content or cleaned)
+                continue
+            if re.match(r"^(must(?:\s+have)?|required|requirement|required skill)\b", lowered):
+                content = re.sub(
+                    r"^(must(?:\s+have)?|required|requirement|required skill)\b",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                ).lstrip(" :-")
+                must_have.append(content or cleaned)
+                continue
+
+            must_have.append(cleaned)
+
+        return must_have, nice_to_have
+
+    @staticmethod
     def format_evaluation_summary(result: CandidateEvaluationResult) -> str:
         """Format human-readable AI scoring summary persisted on candidate row."""
 
+        evidence = result.evidence
+        evidence_summary = (
+            f"evidence(skills={evidence.skills[0]}, "
+            f"experience={evidence.experience[0]}, "
+            f"education={evidence.education[0]}, "
+            f"role_alignment={evidence.role_alignment[0]})"
+        )
         return (
             f"{result.reason} "
+            f"(confidence={result.confidence:.2f}, "
+            f"model_review={result.needs_human_review}, "
             f"(skills={result.breakdown.skills}/40, "
             f"experience={result.breakdown.experience}/30, "
             f"education={result.breakdown.education}/10, "
-            f"role_alignment={result.breakdown.role_alignment}/20)"
+            f"role_alignment={result.breakdown.role_alignment}/20), "
+            f"{evidence_summary})"
         )

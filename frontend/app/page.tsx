@@ -9,8 +9,21 @@ interface SubmitState {
   message: string;
 }
 
+interface JobOpeningCard {
+  id: string;
+  role_title: string;
+  team: string;
+  location: string;
+  experience_level: string;
+  responsibilities: string[];
+  requirements: string[];
+  status: string;
+  paused: boolean;
+}
+
 export default function CandidateApplyPage() {
   const [roles, setRoles] = useState<string[]>([]);
+  const [openings, setOpenings] = useState<JobOpeningCard[]>([]);
   const [isLoadingRoles, setIsLoadingRoles] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>({
@@ -18,7 +31,7 @@ export default function CandidateApplyPage() {
     message: "",
   });
 
-  const loadRoles = useCallback(async () => {
+  const loadOpeningsAndRoles = useCallback(async () => {
     const normalizeRoles = (raw: unknown): string[] => {
       if (!Array.isArray(raw)) return [];
       return Array.from(
@@ -33,31 +46,27 @@ export default function CandidateApplyPage() {
 
     setIsLoadingRoles(true);
     try {
-      const rolesResponse = await fetch(`${API_BASE}/api/v1/roles`, { cache: "no-store" });
-      const rolePayload = await rolesResponse.json().catch(() => null);
-      const directRoles = normalizeRoles(rolePayload);
-
-      if (directRoles.length > 0) {
-        setRoles(directRoles);
+      const openingsResponse = await fetch(`${API_BASE}/api/v1/job-openings`, { cache: "no-store" });
+      const openingsPayload = (await openingsResponse.json().catch(() => null)) as
+        | { items?: JobOpeningCard[] }
+        | null;
+      const openItems = (openingsPayload?.items || [])
+        .filter((item) => (item.status || "").toLowerCase() === "open" && !item.paused)
+        .filter((item) => item.role_title.trim().length > 0);
+      setOpenings(openItems);
+      const openingRoles = Array.from(new Set(openItems.map((item) => item.role_title.trim()))).sort(
+        (a, b) => a.localeCompare(b),
+      );
+      if (openingRoles.length > 0) {
+        setRoles(openingRoles);
         return;
       }
 
-      const openingsResponse = await fetch(`${API_BASE}/api/v1/job-openings`, { cache: "no-store" });
-      const openingsPayload = (await openingsResponse.json().catch(() => null)) as
-        | { items?: Array<{ role_title?: string; status?: string }> }
-        | null;
-
-      const openingRoles = Array.from(
-        new Set(
-          (openingsPayload?.items || [])
-            .filter((item) => (item.status || "").toLowerCase() === "open")
-            .map((item) => (item.role_title || "").trim())
-            .filter((item) => item.length > 0),
-        ),
-      ).sort((a, b) => a.localeCompare(b));
-
-      setRoles(openingRoles);
+      const rolesResponse = await fetch(`${API_BASE}/api/v1/roles`, { cache: "no-store" });
+      const rolePayload = await rolesResponse.json().catch(() => null);
+      setRoles(normalizeRoles(rolePayload));
     } catch {
+      setOpenings([]);
       setRoles([]);
     } finally {
       setIsLoadingRoles(false);
@@ -65,16 +74,16 @@ export default function CandidateApplyPage() {
   }, []);
 
   useEffect(() => {
-    loadRoles();
-  }, [loadRoles]);
+    loadOpeningsAndRoles();
+  }, [loadOpeningsAndRoles]);
 
   useEffect(() => {
     if (roles.length > 0) return;
     const timer = window.setInterval(() => {
-      void loadRoles();
+      void loadOpeningsAndRoles();
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [loadRoles, roles.length]);
+  }, [loadOpeningsAndRoles, roles.length]);
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -129,6 +138,44 @@ export default function CandidateApplyPage() {
       </div>
 
       <section className="panel stack">
+        <h2>Open Roles</h2>
+        <p className="muted">
+          Each role includes team, location, experience level, responsibilities, and requirements.
+        </p>
+        <div className="opening-grid">
+          {openings.map((opening) => (
+            <article key={opening.id} className="opening-card stack-tight">
+              <h3>{opening.role_title}</h3>
+              <p className="muted">
+                {opening.team} · {opening.location} · {opening.experience_level}
+              </p>
+              <div>
+                <strong>Responsibilities</strong>
+                <ul>
+                  {opening.responsibilities.map((item) => (
+                    <li key={`${opening.id}-resp-${item}`}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <strong>Requirements</strong>
+                <ul>
+                  {opening.requirements.map((item) => (
+                    <li key={`${opening.id}-req-${item}`}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            </article>
+          ))}
+        </div>
+        {!isLoadingRoles && openings.length < 3 ? (
+          <p className="muted">
+            Fewer than 3 open roles are currently active. Admin can publish more openings in dashboard.
+          </p>
+        ) : null}
+      </section>
+
+      <section className="panel stack">
         <h2>Apply To A Role</h2>
         <p className="muted">
           Select an available position from the dropdown and upload your resume (PDF/DOC/DOCX).
@@ -158,13 +205,8 @@ export default function CandidateApplyPage() {
             </label>
 
             <label>
-              GitHub URL
-              <input name="github_url" type="url" required />
-            </label>
-
-            <label>
-              Twitter URL (optional)
-              <input name="twitter_url" type="url" />
+              GitHub URL (optional)
+              <input name="github_url" type="url" />
             </label>
 
             <label className="full">

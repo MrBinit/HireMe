@@ -5,14 +5,15 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
     Uuid,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,7 +26,32 @@ class ApplicantApplication(Base):
 
     __tablename__ = "applicant_applications"
     __table_args__ = (
-        UniqueConstraint("job_opening_id", "email", name="uq_application_opening_email"),
+        CheckConstraint(
+            "parse_status IN ('pending', 'in_progress', 'completed', 'failed')",
+            name="ck_applications_parse_status",
+        ),
+        CheckConstraint(
+            "evaluation_status IS NULL OR "
+            "evaluation_status IN ('queued', 'in_progress', 'completed', 'failed')",
+            name="ck_applications_evaluation_status",
+        ),
+        CheckConstraint(
+            "applicant_status IN ("
+            "'applied', 'screened', 'shortlisted', 'in_interview', 'offer', 'rejected', "
+            "'received', 'in_progress', 'interview', 'accepted', 'sent_to_manager', "
+            "'offer_letter_created', 'offer_letter_sent', 'offer_letter_sign'"
+            ")",
+            name="ck_applications_applicant_status",
+        ),
+        CheckConstraint(
+            "manager_decision IS NULL OR manager_decision IN ('select', 'reject')",
+            name="ck_applications_manager_decision",
+        ),
+        CheckConstraint(
+            "interview_transcript_status IS NULL OR "
+            "interview_transcript_status IN ('pending', 'processing', 'completed', 'not_found', 'failed')",
+            name="ck_applications_interview_transcript_status",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -154,3 +180,11 @@ class ApplicantApplication(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+
+Index(
+    "uq_applications_opening_email_ci",
+    ApplicantApplication.job_opening_id,
+    func.lower(ApplicantApplication.email),
+    unique=True,
+)

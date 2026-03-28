@@ -111,6 +111,8 @@ evaluation:
 
     JOB:
     - Role: {role}
+    - Must-have Skills: {must_have_skills}
+    - Nice-to-have Skills: {nice_to_have_skills}
     - Required Skills: {required_skills}
     - Experience Range: {min_exp}-{max_exp}
     - Description: {job_description}
@@ -127,6 +129,14 @@ evaluation:
         "education": number,
         "role_alignment": number
       },
+      "evidence": {
+        "skills": ["1-3 concise factual snippets from input"],
+        "experience": ["1-3 concise factual snippets from input"],
+        "education": ["1-3 concise factual snippets from input"],
+        "role_alignment": ["1-3 concise factual snippets from input"]
+      },
+      "confidence": number (0.0-1.0),
+      "needs_human_review": boolean,
       "reason": "short explanation (max 3 sentences)"
     }
 
@@ -137,6 +147,8 @@ evaluation:
     - Do NOT hallucinate missing data
     - Be strict and realistic
     - Prefer conservative scoring over generous scoring
+    - Evidence must cite only facts present in CANDIDATE or JOB input
+    - If key evidence is weak/missing, set `needs_human_review=true`
 
 research:
   enrichment:

@@ -64,7 +64,7 @@ scheduling:
     - interview_reschedule_options_sent
   fireflies:
     enabled: true
-    mock_mode: false
+    demo_mode: true
     api_url: "https://api.fireflies.ai/graphql"
     owner_email: "doersbinit@gmail.com"
     request_timeout_seconds: 15.0

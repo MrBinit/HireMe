@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from starlette.datastructures import Headers, UploadFile
 
 from app.core.runtime_config import (
@@ -16,6 +17,8 @@ from app.core.runtime_config import (
     JobOpeningRuntimeConfig,
     NotificationRuntimeConfig,
     ParseRuntimeConfig,
+    ResearchRuntimeConfig,
+    SchedulingRuntimeConfig,
 )
 from app.repositories.local_application_repository import LocalApplicationRepository
 from app.repositories.local_job_opening_repository import LocalJobOpeningRepository
@@ -47,7 +50,10 @@ from app.services.parse_queue import (
     ParseQueuePublisher,
     ResumeParseJob,
 )
+from app.services.research_queue import CandidateResearchEnrichmentJob, ResearchQueuePublisher
 from app.services.resume_storage import LocalResumeStorage
+from app.services.scheduling_queue import CandidateInterviewSchedulingJob, SchedulingQueuePublisher
+from app.services.webhook_event_queue import WebhookEventJob, WebhookEventQueuePublisher
 
 
 class _CaptureParseQueuePublisher(ParseQueuePublisher):
@@ -68,11 +74,42 @@ class _FailingParseQueuePublisher(ParseQueuePublisher):
         raise ParseQueuePublishError("publish failed")
 
 
+class _CaptureResearchQueuePublisher(ResearchQueuePublisher):
+    """Test research queue publisher that captures enqueued jobs."""
+
+    def __init__(self) -> None:
+        self.jobs: list[CandidateResearchEnrichmentJob] = []
+
+    async def publish(self, job: CandidateResearchEnrichmentJob) -> None:
+        self.jobs.append(job)
+
+
+class _CaptureSchedulingQueuePublisher(SchedulingQueuePublisher):
+    """Test scheduling queue publisher that captures enqueued jobs."""
+
+    def __init__(self) -> None:
+        self.jobs: list[CandidateInterviewSchedulingJob] = []
+
+    async def publish(self, job: CandidateInterviewSchedulingJob) -> None:
+        self.jobs.append(job)
+
+
+class _CaptureWebhookEventQueuePublisher(WebhookEventQueuePublisher):
+    """Test webhook-event queue publisher that captures enqueued jobs."""
+
+    def __init__(self) -> None:
+        self.jobs: list[WebhookEventJob] = []
+
+    async def publish(self, job: WebhookEventJob) -> None:
+        self.jobs.append(job)
+
+
 class _CaptureEmailSender(EmailSender):
     """Test email sender that captures confirmation payloads."""
 
     def __init__(self) -> None:
         self.payloads = []
+        self.initial_rejection_payloads: list[InitialScreeningRejectionEmail] = []
         self.offer_payloads: list[OfferLetterCandidateEmail] = []
         self.manager_rejection_payloads: list[ManagerDecisionRejectionEmail] = []
         self.offer_signed_alert_payloads: list[OfferLetterSignedAlertEmail] = []
@@ -89,6 +126,7 @@ class _CaptureEmailSender(EmailSender):
         payload: InitialScreeningRejectionEmail,
     ) -> None:
         self.payloads.append(payload)
+        self.initial_rejection_payloads.append(payload)
 
     async def send_offer_letter_to_candidate(
         self,
@@ -178,7 +216,14 @@ class _FakeDocusignService:
         self.send_calls.append((candidate_name, candidate_email))
         return DocusignEnvelopeDispatch(envelope_id="env-123", status="sent")
 
-    def validate_webhook_secret(self, *, token: str | None) -> None:
+    def validate_webhook_secret(
+        self,
+        *,
+        token: str | None,
+        raw_body: bytes | None = None,
+        signature: str | None = None,
+    ) -> None:
+        _ = (raw_body, signature)
         if token != self.webhook_token:
             raise ApplicationValidationError("invalid DocuSign webhook token")
 
@@ -274,14 +319,20 @@ def _build_service(
     *,
     use_queue: bool = False,
     parse_queue_publisher: ParseQueuePublisher | None = None,
+    research_enrichment_config: ResearchRuntimeConfig.EnrichmentRuntimeConfig | None = None,
+    research_queue_publisher: ResearchQueuePublisher | None = None,
+    scheduling_config: SchedulingRuntimeConfig | None = None,
+    scheduling_queue_publisher: SchedulingQueuePublisher | None = None,
     notification_config: NotificationRuntimeConfig | None = None,
     email_sender: EmailSender | None = None,
     offer_letter_service=None,
     docusign_service=None,
     slack_service=None,
     slack_welcome_service=None,
+    webhook_event_queue_publisher: WebhookEventQueuePublisher | None = None,
     s3_store=None,
     slack_invite_fallback_join_url: str | None = None,
+    webhook_async_config: ApplicationRuntimeConfig.WebhookAsyncRuntimeConfig | None = None,
 ) -> tuple[JobOpeningService, ApplicationService]:
     """Create service instances backed by temp local JSON storage."""
 
@@ -297,6 +348,13 @@ def _build_service(
         job_opening_repository=job_repo,
         config=ApplicationRuntimeConfig(
             slack_invite_fallback_join_url=slack_invite_fallback_join_url or "",
+            webhook_async=(
+                webhook_async_config
+                or ApplicationRuntimeConfig.WebhookAsyncRuntimeConfig(
+                    enabled=False,
+                    use_queue=False,
+                )
+            ),
             manager_selection_template=(
                 "Subject: Offer of Employment - {confirmed_job_title}\n\n"
                 "Dear {candidate_name},\n\n"
@@ -317,12 +375,23 @@ def _build_service(
         resume_storage=LocalResumeStorage(tmp_path / "resumes"),
         parse_config=ParseRuntimeConfig(use_queue=use_queue),
         parse_queue_publisher=parse_queue_publisher or NoopParseQueuePublisher(),
+        research_enrichment_config=research_enrichment_config
+        or ResearchRuntimeConfig.EnrichmentRuntimeConfig(use_queue=False),
+        research_queue_publisher=research_queue_publisher,
+        scheduling_config=scheduling_config
+        or SchedulingRuntimeConfig(
+            enabled=False,
+            use_queue=False,
+            auto_enqueue_after_shortlist=False,
+        ),
+        scheduling_queue_publisher=scheduling_queue_publisher,
         notification_config=notification_config or NotificationRuntimeConfig(enabled=False),
         email_sender=email_sender or NoopEmailSender(),
         offer_letter_service=offer_letter_service,
         docusign_service=docusign_service,
         slack_service=slack_service,
         slack_welcome_service=slack_welcome_service,
+        webhook_event_queue_publisher=webhook_event_queue_publisher,
         s3_store=s3_store or _FakeS3Store(),  # type: ignore[arg-type]
         s3_bucket="test-bucket",
     )
@@ -685,6 +754,106 @@ def test_admin_can_update_applicant_status(tmp_path: Path) -> None:
         assert updated is not None
         assert updated.id == created.id
         assert updated.applicant_status == "interview"
+
+    asyncio.run(run())
+
+
+def test_manual_shortlist_enqueues_research_and_scheduling(tmp_path: Path) -> None:
+    """Manual move-ahead decision should enqueue same downstream shortlist jobs."""
+
+    async def run() -> None:
+        research_queue = _CaptureResearchQueuePublisher()
+        scheduling_queue = _CaptureSchedulingQueuePublisher()
+        job_service, app_service = _build_service(
+            tmp_path,
+            research_enrichment_config=ResearchRuntimeConfig.EnrichmentRuntimeConfig(
+                use_queue=True,
+                provider="sqs",
+                queue_url="https://example.com/research-queue",
+                target_statuses=["shortlisted"],
+            ),
+            research_queue_publisher=research_queue,
+            scheduling_config=SchedulingRuntimeConfig(
+                enabled=True,
+                use_queue=True,
+                provider="sqs",
+                queue_url="https://example.com/scheduling-queue",
+                auto_enqueue_after_shortlist=True,
+                target_statuses=["shortlisted"],
+            ),
+            scheduling_queue_publisher=scheduling_queue,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Manual Queue Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Queue Ready User",
+                email="queue-ready@example.com",
+                linkedin_url="https://www.linkedin.com/in/queue-ready-user",
+                portfolio_url="https://queue-ready.dev",
+                github_url="https://github.com/queue-ready-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        updated = await app_service.update_applicant_status(
+            application_id=created.id,
+            applicant_status="shortlisted",
+            note="Human review approved. Move ahead.",
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "shortlisted"
+        assert updated.interview_schedule_status == "queued"
+        assert len(research_queue.jobs) == 1
+        assert len(scheduling_queue.jobs) == 1
+        assert research_queue.jobs[0].application_id == created.id
+        assert scheduling_queue.jobs[0].application_id == created.id
+
+    asyncio.run(run())
+
+
+def test_manual_rejection_sends_initial_screening_rejection_email(tmp_path: Path) -> None:
+    """Manual do-not-move-ahead decision should send a rejection email."""
+
+    async def run() -> None:
+        email_sender = _CaptureEmailSender()
+        job_service, app_service = _build_service(
+            tmp_path,
+            notification_config=NotificationRuntimeConfig(enabled=True),
+            email_sender=email_sender,
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Manual Reject Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Manual Reject User",
+                email="manual-reject@example.com",
+                linkedin_url="https://www.linkedin.com/in/manual-reject-user",
+                portfolio_url="https://manual-reject.dev",
+                github_url="https://github.com/manual-reject-user",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+        )
+
+        updated = await app_service.update_applicant_status(
+            application_id=created.id,
+            applicant_status="rejected",
+            note="Not moving ahead after manual review.",
+        )
+
+        assert updated is not None
+        assert updated.applicant_status == "rejected"
+        assert len(email_sender.initial_rejection_payloads) == 1
+        payload = email_sender.initial_rejection_payloads[0]
+        assert payload.candidate_email == str(created.email)
+        assert payload.rejection_reason == "Not moving ahead after manual review."
 
     asyncio.run(run())
 
@@ -1082,8 +1251,8 @@ def test_manager_reject_sends_candidate_email_when_notifications_enabled(tmp_pat
     asyncio.run(run())
 
 
-def test_manager_decision_demo_override_allows_before_interview_done(tmp_path: Path) -> None:
-    """Demo override should allow manager decision before interview is marked done."""
+def test_manager_decision_requires_interview_done(tmp_path: Path) -> None:
+    """Manager decision should be blocked until interview is marked done."""
 
     async def run() -> None:
         job_service, app_service = _build_service(tmp_path)
@@ -1103,13 +1272,12 @@ def test_manager_decision_demo_override_allows_before_interview_done(tmp_path: P
             resume=_resume_file(),
         )
 
-        updated = await app_service.record_manager_decision(
-            application_id=created.id,
-            decision="reject",
-            note="Demo override allows pending interview decision.",
-        )
-        assert updated is not None
-        assert updated.manager_decision == "reject"
+        with pytest.raises(ApplicationValidationError):
+            await app_service.record_manager_decision(
+                application_id=created.id,
+                decision="reject",
+                note="Blocked before interview done.",
+            )
 
     asyncio.run(run())
 
@@ -1560,7 +1728,7 @@ def test_docusign_signed_event_marks_onboarded_when_already_in_workspace(tmp_pat
         assert updated.slack_onboarding_status == "onboarded"
         assert updated.slack_user_id == "U42EXIST"
         assert updated.slack_error is None
-        assert len(email_sender.slack_invite_payloads) == 1
+        assert len(email_sender.slack_invite_payloads) == 0
 
     asyncio.run(run())
 
@@ -1791,6 +1959,94 @@ def test_slack_team_join_sends_ai_welcome_and_hr_notification(tmp_path: Path) ->
         assert updated.slack_welcome_sent_at is not None
         assert updated.slack_onboarding_status == "onboarded"
         assert updated.applicant_status == "offer_letter_sign"
+
+    asyncio.run(run())
+
+
+def test_slack_team_join_defer_enqueues_durable_job(tmp_path: Path) -> None:
+    """Deferred Slack team_join handling should enqueue durable webhook job."""
+
+    async def run() -> None:
+        capture_queue = _CaptureWebhookEventQueuePublisher()
+        _, app_service = _build_service(
+            tmp_path,
+            slack_service=_FakeSlackService(),
+            webhook_event_queue_publisher=capture_queue,
+            webhook_async_config=ApplicationRuntimeConfig.WebhookAsyncRuntimeConfig(
+                enabled=True,
+                use_queue=True,
+                provider="sqs",
+                queue_url="https://example.test/webhook-queue",
+            ),
+        )
+        payload = {
+            "type": "event_callback",
+            "event_id": "EvSlack123",
+            "event": {
+                "type": "team_join",
+                "event_ts": "1720000000.001",
+                "user": {
+                    "id": "UQ123",
+                    "profile": {"email": "slack-join@example.com"},
+                },
+            },
+        }
+
+        response = await app_service.handle_slack_webhook(
+            raw_body=json.dumps(payload).encode("utf-8"),
+            headers={},
+            defer_team_join_processing=True,
+        )
+
+        assert response == {"processed": True, "queued": True}
+        assert len(capture_queue.jobs) == 1
+        assert capture_queue.jobs[0].event_type == "slack_team_join"
+        assert capture_queue.jobs[0].event_key == "slack:team_join:EvSlack123"
+        assert capture_queue.jobs[0].payload["slack_user_id"] == "UQ123"
+
+    asyncio.run(run())
+
+
+def test_enqueue_confirmation_email_publishes_webhook_job(tmp_path: Path) -> None:
+    """Confirmation email should be queued when webhook async queueing is enabled."""
+
+    async def run() -> None:
+        capture_queue = _CaptureWebhookEventQueuePublisher()
+        job_service, app_service = _build_service(
+            tmp_path,
+            webhook_event_queue_publisher=capture_queue,
+            webhook_async_config=ApplicationRuntimeConfig.WebhookAsyncRuntimeConfig(
+                enabled=True,
+                use_queue=True,
+                provider="sqs",
+                queue_url="https://example.test/webhook-queue",
+            ),
+            notification_config=NotificationRuntimeConfig(enabled=False),
+        )
+        opening = await _create_opening(
+            job_service,
+            role_title=f"Webhook Queue Engineer {uuid4().hex[:6]}",
+        )
+        created = await app_service.submit(
+            payload=ApplicationCreatePayload(
+                full_name="Queue Email Candidate",
+                email="queue-email@example.com",
+                linkedin_url="https://www.linkedin.com/in/queue-email",
+                portfolio_url="https://queue-email.dev",
+                github_url="https://github.com/queue-email",
+                role_selection=opening.role_title,
+            ),
+            resume=_resume_file(),
+            send_confirmation_email=False,
+        )
+
+        await app_service.enqueue_application_confirmation_email(application_id=created.id)
+
+        assert len(capture_queue.jobs) == 1
+        job = capture_queue.jobs[0]
+        assert job.event_type == "application_confirmation_email"
+        assert job.payload["application_id"] == str(created.id)
+        assert job.event_key == f"application_confirmation_email:{created.id}"
 
     asyncio.run(run())
 

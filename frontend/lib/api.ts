@@ -72,6 +72,76 @@ export interface StatusHistoryEntry {
   source: string;
 }
 
+export interface ResearchProvenanceEntry {
+  claim?: string | null;
+  evidence_refs?: string[];
+}
+
+export interface ResearchIssueFlag {
+  type?: string | null;
+  severity?: string | null;
+  source?: string | null;
+  details?: string | null;
+}
+
+export interface ResearchLlmIssue {
+  type?: string | null;
+  severity?: string | null;
+  evidence?: string | null;
+}
+
+export interface ResearchLlmAnalysis {
+  source?: string | null;
+  model_id?: string | null;
+  summary?: string | null;
+  confidence?: string | null;
+  issues?: ResearchLlmIssue[];
+  provenance?: ResearchProvenanceEntry[];
+}
+
+export interface ResearchDeterministicChecks {
+  has_minimum_public_evidence?: boolean | null;
+  manual_review_required?: boolean | null;
+  confidence_baseline?: string | null;
+  high_severity_issue_count?: number | null;
+  notes?: string[];
+}
+
+export interface ResearchHit {
+  title?: string | null;
+  link?: string | null;
+  snippet?: string | null;
+}
+
+export interface ResearchGithubRepo {
+  name?: string | null;
+  html_url?: string | null;
+}
+
+export interface ResearchExtractors {
+  linkedin?: {
+    matched_profile_url?: string | null;
+    top_hits?: ResearchHit[];
+  } | null;
+  github?: {
+    profile_url?: string | null;
+    top_repositories?: ResearchGithubRepo[];
+  } | null;
+  portfolio?: {
+    matched_portfolio_url?: string | null;
+    top_hits?: ResearchHit[];
+  } | null;
+}
+
+export interface ResearchSummary {
+  brief?: string | null;
+  discrepancies?: string[];
+  issue_flags?: ResearchIssueFlag[];
+  deterministic_checks?: ResearchDeterministicChecks | null;
+  llm_analysis?: ResearchLlmAnalysis | null;
+  extractors?: ResearchExtractors | null;
+}
+
 export interface ResumeDownloadResponse {
   download_url: string;
   expires_in_seconds: number;
@@ -96,6 +166,7 @@ export interface CandidateRecord {
   ai_screening_summary?: string | null;
   candidate_brief?: string | null;
   online_research_summary?: string | null;
+  research_summary?: ResearchSummary | null;
   interview_schedule_status?: string | null;
   interview_schedule_options?: Record<string, unknown> | null;
   interview_schedule_sent_at?: string | null;
@@ -171,10 +242,21 @@ export interface ManagerDecisionRequest {
   selection_details?: ManagerSelectionDetails | null;
 }
 
+export interface ApplicantStatusUpdateRequest {
+  applicant_status: ApplicantStatus;
+  note?: string | null;
+}
+
+export interface FirefliesDemoRequest {
+  mock_completed: boolean;
+}
+
 export interface ReferenceRecord {
   id: string;
   application_id: string;
   candidate_email: string;
+  candidate_name?: string | null;
+  candidate_position?: string | null;
   referee_name: string;
   referee_email?: string | null;
   referee_phone?: string | null;
@@ -329,6 +411,24 @@ export async function submitManagerDecision(
   );
 }
 
+export async function updateApplicantStatus(
+  applicationId: string,
+  token: string,
+  payload: ApplicantStatusUpdateRequest,
+): Promise<CandidateRecord> {
+  return requestJson<CandidateRecord>(
+    `/api/v1/admin/candidates/${applicationId}/status`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export async function approveOfferLetter(
   applicationId: string,
   token: string,
@@ -370,6 +470,24 @@ export async function retrySlackInvite(
       headers: {
         Authorization: `Bearer ${token}`,
       },
+    },
+  );
+}
+
+export async function setFirefliesDemoState(
+  applicationId: string,
+  token: string,
+  payload: FirefliesDemoRequest,
+): Promise<CandidateRecord> {
+  return requestJson<CandidateRecord>(
+    `/api/v1/admin/candidates/${applicationId}/fireflies-demo`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
     },
   );
 }

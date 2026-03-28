@@ -27,6 +27,13 @@ class _FakeApplicationLookup:
             return None
         return self._record
 
+    async def get_latest_by_email(self, *, email: str) -> ApplicationRecord | None:
+        if self._record is None:
+            return None
+        if str(self._record.email).strip().casefold() != email.strip().casefold():
+            return None
+        return self._record
+
     async def update_reference_status(
         self,
         *,
@@ -145,5 +152,72 @@ def test_reference_create_rejects_when_candidate_email_mismatch() -> None:
 
         assert error is not None
         assert "candidate_email must match" in str(error)
+
+    asyncio.run(run())
+
+
+def test_referee_reference_create_by_email_succeeds() -> None:
+    """Referee minimal flow should resolve applicant by email and create reference."""
+
+    async def run() -> None:
+        application = _application_record()
+        app_lookup = _FakeApplicationLookup(application)
+        service = ReferenceService(
+            repository=_InMemoryReferenceRepository(),
+            application_repository=app_lookup,
+        )
+
+        from app.schemas.reference import RefereeReferenceCreatePayload
+
+        created = await service.create_from_referee(
+            RefereeReferenceCreatePayload(
+                applicant_email="candidate@example.com",
+                applicant_name="Candidate Name",
+                applicant_position="Backend Engineer",
+                referee_name="Referee One",
+                referee_email="ref1@example.com",
+                referee_note="Worked closely on a production backend migration.",
+            )
+        )
+        assert created.application_id == application.id
+        assert str(created.candidate_email) == "candidate@example.com"
+        assert created.candidate_name == "Candidate Name"
+        assert created.candidate_position == "Backend Engineer"
+        assert created.referee_name == "Referee One"
+        assert str(created.referee_email) == "ref1@example.com"
+        assert created.notes == "Worked closely on a production backend migration."
+        assert app_lookup.updated_reference_status is True
+
+    asyncio.run(run())
+
+
+def test_referee_reference_create_by_email_rejects_when_not_found() -> None:
+    """Referee minimal flow should return clear message when applicant email is unknown."""
+
+    async def run() -> None:
+        service = ReferenceService(
+            repository=_InMemoryReferenceRepository(),
+            application_repository=_FakeApplicationLookup(None),
+        )
+
+        from app.schemas.reference import RefereeReferenceCreatePayload
+
+        error = None
+        try:
+            await service.create_from_referee(
+                RefereeReferenceCreatePayload(
+                    applicant_email="missing@example.com",
+                    applicant_name="Candidate Name",
+                    applicant_position="Backend Engineer",
+                    referee_name="Referee One",
+                    referee_email="ref1@example.com",
+                    referee_note="Strong candidate.",
+                )
+            )
+        except ReferenceValidationError as exc:
+            error = exc
+
+        assert error is not None
+        assert str(error) == "Sorry, no applicant found with this email."
 
     asyncio.run(run())

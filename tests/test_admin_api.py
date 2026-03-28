@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -14,14 +15,20 @@ from app.api.deps import (
     get_candidate_evaluation_service_dep,
     get_evaluation_queue_publisher_dep,
     get_research_queue_publisher_dep,
+    get_scheduling_queue_publisher_dep,
 )
 from app.api.v1.admin import router as admin_router
 from app.core.runtime_config import get_runtime_config
 from app.core.settings import get_settings
 from app.schemas.application import ApplicationListResponse, ApplicationRecord, ResumeFileMeta
-from app.schemas.evaluation import CandidateEvaluationResult, EvaluationBreakdown
+from app.schemas.evaluation import (
+    CandidateEvaluationResult,
+    EvaluationBreakdown,
+    EvaluationEvidence,
+)
 from app.services.evaluation_queue import CandidateEvaluationJob
 from app.services.research_queue import CandidateResearchEnrichmentJob
+from app.services.scheduling_queue import CandidateInterviewSchedulingJob
 
 
 class _FakeApplicationService:
@@ -140,6 +147,29 @@ class _FakeApplicationService:
         self._record = self._record.model_copy(update=updates)
         return self._record
 
+    async def set_fireflies_demo_state(self, *, application_id, mock_completed):
+        if str(application_id) != str(self._record.id):
+            return None
+        if mock_completed:
+            self._record = self._record.model_copy(
+                update={
+                    "interview_schedule_status": "interview_done",
+                    "interview_transcript_status": "completed",
+                    "interview_transcript_url": f"https://app.fireflies.ai/view/mock-{self._record.id}",
+                    "interview_transcript_summary": "Mock transcript summary for demo flow.",
+                }
+            )
+        else:
+            self._record = self._record.model_copy(
+                update={
+                    "interview_schedule_status": "interview_booked",
+                    "interview_transcript_status": "processing",
+                    "interview_transcript_url": None,
+                    "interview_transcript_summary": None,
+                }
+            )
+        return self._record
+
 
 class _FakeCandidateEvaluationService:
     """Minimal evaluator service for admin endpoint tests."""
@@ -154,6 +184,14 @@ class _FakeCandidateEvaluationService:
                 education=8,
                 role_alignment=18,
             ),
+            evidence=EvaluationEvidence(
+                skills=["Strong skill overlap"],
+                experience=["Experience in target range"],
+                education=["Relevant CS background"],
+                role_alignment=["Prior backend roles"],
+            ),
+            confidence=0.89,
+            needs_human_review=False,
             reason="Good fit for the role.",
         )
 
@@ -179,6 +217,16 @@ class _FakeResearchQueuePublisher:
         self.jobs: list[CandidateResearchEnrichmentJob] = []
 
     async def publish(self, job: CandidateResearchEnrichmentJob) -> None:
+        self.jobs.append(job)
+
+
+class _FakeSchedulingQueuePublisher:
+    """Minimal scheduling queue publisher for admin endpoint tests."""
+
+    def __init__(self) -> None:
+        self.jobs: list[CandidateInterviewSchedulingJob] = []
+
+    async def publish(self, job: CandidateInterviewSchedulingJob) -> None:
         self.jobs.append(job)
 
 
@@ -459,3 +507,169 @@ def test_admin_manager_decision_select_requires_selection_details(monkeypatch) -
     )
 
     assert response.status_code == 422
+
+
+def test_admin_fireflies_demo_true_marks_interview_done(monkeypatch) -> None:
+    """Fireflies demo=true should mark interview done with completed transcript fields."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.patch(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/fireflies-demo",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"mock_completed": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["interview_schedule_status"] == "interview_done"
+    assert body["interview_transcript_status"] == "completed"
+    assert "mock-" in str(body["interview_transcript_url"])
+
+
+def test_admin_fireflies_demo_false_sets_processing(monkeypatch) -> None:
+    """Fireflies demo=false should keep transcript in processing state."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.patch(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/fireflies-demo",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"mock_completed": False},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["interview_schedule_status"] == "interview_booked"
+    assert body["interview_transcript_status"] == "processing"
+    assert body["interview_transcript_url"] is None
+
+
+def test_admin_candidate_get_returns_typed_research_summary(monkeypatch) -> None:
+    """Candidate GET should include parsed research_summary object for frontend usage."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    fake_service._record = fake_service._record.model_copy(
+        update={
+            "online_research_summary": json.dumps(
+                {
+                    "brief": "Candidate has relevant OSS contributions.",
+                    "deterministic_checks": {
+                        "manual_review_required": False,
+                        "confidence_baseline": "medium",
+                    },
+                    "llm_analysis": {"confidence": "high", "issues": []},
+                }
+            )
+        }
+    )
+
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.get(
+        f"/api/v1/admin/candidates/{fake_service._record.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["online_research_summary"]
+    assert body["research_summary"]["brief"] == "Candidate has relevant OSS contributions."
+    assert body["research_summary"]["llm_analysis"]["confidence"] == "high"
+
+
+def test_admin_schedule_endpoint_blocks_manual_review_required(monkeypatch) -> None:
+    """Scheduling queue should reject candidates gated by manual review requirement."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    scheduling_queue = _FakeSchedulingQueuePublisher()
+    client.app.dependency_overrides[get_scheduling_queue_publisher_dep] = lambda: scheduling_queue
+    fake_service._record = fake_service._record.model_copy(
+        update={
+            "online_research_summary": json.dumps(
+                {
+                    "deterministic_checks": {
+                        "manual_review_required": True,
+                        "confidence_baseline": "medium",
+                    }
+                }
+            )
+        }
+    )
+
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.post(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/schedule",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
+    assert "explicit reviewer action" in response.json()["detail"]
+    assert len(scheduling_queue.jobs) == 0
+
+
+def test_admin_schedule_endpoint_blocks_low_confidence(monkeypatch) -> None:
+    """Scheduling queue should reject candidates gated by low confidence."""
+
+    _set_admin_test_env(monkeypatch)
+    _reset_cached_config()
+
+    client, fake_service, _, _ = _build_client()
+    scheduling_queue = _FakeSchedulingQueuePublisher()
+    client.app.dependency_overrides[get_scheduling_queue_publisher_dep] = lambda: scheduling_queue
+    fake_service._record = fake_service._record.model_copy(
+        update={
+            "online_research_summary": json.dumps(
+                {
+                    "deterministic_checks": {"manual_review_required": False},
+                    "llm_analysis": {"confidence": "low"},
+                }
+            )
+        }
+    )
+
+    login_response = client.post(
+        "/api/v1/admin/login",
+        json={"username": "admin", "password": "StrongSecret123!"},
+    )
+    token = login_response.json()["access_token"]
+
+    response = client.post(
+        f"/api/v1/admin/candidates/{fake_service._record.id}/schedule",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 422
+    assert "explicit reviewer action" in response.json()["detail"]
+    assert len(scheduling_queue.jobs) == 0

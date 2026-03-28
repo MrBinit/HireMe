@@ -77,6 +77,10 @@ services:
     <<: *aws-runtime
     command: ["python", "-m", "app.scripts.sqs_scheduling_worker"]
 
+  sqs_webhook_event_worker:
+    <<: *aws-runtime
+    command: ["python", "-m", "app.scripts.sqs_webhook_event_worker"]
+
   interview_hold_expiry_worker:
     <<: *aws-runtime
     command: ["python", "-m", "app.scripts.interview_hold_expiry_worker"]

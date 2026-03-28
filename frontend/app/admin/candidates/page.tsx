@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
   approveOfferLetter,
   API_BASE,
   CandidateRecord,
+  FirefliesDemoRequest,
   getAdminOfferLetterDownloadUrl,
   getAdminResumeDownloadUrl,
   ManagerSelectionDetails,
@@ -15,9 +16,50 @@ import {
   ReferenceRecord,
   readApiError,
   retrySlackInvite,
+  setFirefliesDemoState,
   submitManagerDecision,
   syncOfferLetterSignatureStatus,
+  updateApplicantStatus,
 } from "../../../lib/api";
+import { evidenceRefHref, normalizeSeverity, parseResearchSummary } from "../../../lib/researchSummary";
+
+function severityBadgeClass(value: string): string {
+  const normalized = normalizeSeverity(value);
+  return `badge severity-badge severity-${normalized}`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "-";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function formatIssueType(value: string): string {
+  return String(value || "unknown")
+    .trim()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function tryPrettyJson(value: string): string | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (!(raw.startsWith("{") || raw.startsWith("["))) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return null;
+  }
+}
+
+function summarizeText(value: string, maxChars: number): string {
+  const text = String(value || "").trim();
+  if (!text) return "No details provided.";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars).trimEnd()}...`;
+}
 
 export default function CandidateProfilePage() {
   const router = useRouter();
@@ -30,7 +72,10 @@ export default function CandidateProfilePage() {
   const [isApprovingOfferLetter, setIsApprovingOfferLetter] = useState(false);
   const [isSyncingSignature, setIsSyncingSignature] = useState(false);
   const [isRetryingSlackInvite, setIsRetryingSlackInvite] = useState(false);
+  const [isApplyingFirefliesDemo, setIsApplyingFirefliesDemo] = useState(false);
+  const [isUpdatingApplicantStatus, setIsUpdatingApplicantStatus] = useState(false);
   const [isSubmittingDecision, setIsSubmittingDecision] = useState(false);
+  const [statusDecisionNote, setStatusDecisionNote] = useState("");
   const [decision, setDecision] = useState<"select" | "reject">("select");
   const [decisionNote, setDecisionNote] = useState("");
   const [selectionDetails, setSelectionDetails] = useState<ManagerSelectionDetails>({
@@ -47,14 +92,21 @@ export default function CandidateProfilePage() {
   const [error, setError] = useState("");
   const candidateId = candidate?.id || "";
   const hasBrief = Boolean(candidate?.candidate_brief);
+  const parsedResearch = useMemo(
+    () => parseResearchSummary(candidate?.online_research_summary, candidate?.research_summary),
+    [candidate?.online_research_summary, candidate?.research_summary],
+  );
   const isRejected = candidate?.applicant_status === "rejected";
   const evalFailed = candidate?.evaluation_status === "failed";
   const interviewScheduleStatus = String(candidate?.interview_schedule_status || "").toLowerCase();
+  const canSubmitManagerDecision = interviewScheduleStatus === "interview_done";
   const transcriptStatus = String(candidate?.interview_transcript_status || "").toLowerCase();
   const isInterviewLifecycle = interviewScheduleStatus.startsWith("interview");
   const isTranscriptTerminal = ["completed", "not_found", "failed"].includes(transcriptStatus);
   const needsBriefRefresh = !hasBrief && !isRejected && !evalFailed;
   const needsTranscriptRefresh = isInterviewLifecycle && !isTranscriptTerminal;
+  const canManualScreeningDecision =
+    candidate?.applicant_status === "screened" || candidate?.applicant_status === "applied";
   const fireflies = (() => {
     if (!candidate?.interview_schedule_options) return null;
     const source = candidate.interview_schedule_options as Record<string, unknown>;
@@ -76,6 +128,18 @@ export default function CandidateProfilePage() {
     firefliesTranscript && Array.isArray(firefliesTranscript.action_items)
       ? firefliesTranscript.action_items.filter((item): item is string => typeof item === "string")
       : [];
+  const issueFlags = parsedResearch?.issueFlags || [];
+  const issueCounts = issueFlags.reduce(
+    (acc, item) => {
+      const sev = normalizeSeverity(item.severity);
+      if (sev === "high") acc.high += 1;
+      else if (sev === "medium") acc.medium += 1;
+      else if (sev === "low") acc.low += 1;
+      else acc.unknown += 1;
+      return acc;
+    },
+    { high: 0, medium: 0, low: 0, unknown: 0 },
+  );
 
   useEffect(() => {
     const stored = localStorage.getItem("hireme_admin_token");
@@ -299,12 +363,51 @@ export default function CandidateProfilePage() {
     }
   };
 
+  const onSetFirefliesDemo = async (mockCompleted: boolean) => {
+    if (!token || !candidate) return;
+    setIsApplyingFirefliesDemo(true);
+    setError("");
+    try {
+      const payload: FirefliesDemoRequest = { mock_completed: mockCompleted };
+      const updated = await setFirefliesDemoState(candidate.id, token, payload);
+      setCandidate(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to apply Fireflies demo state");
+    } finally {
+      setIsApplyingFirefliesDemo(false);
+    }
+  };
+
   const onSelectionDetailsChange = (key: keyof ManagerSelectionDetails, value: string) => {
     setSelectionDetails((prev) => ({ ...prev, [key]: value }));
   };
 
+  const onUpdateApplicantStatus = async (nextStatus: "shortlisted" | "rejected") => {
+    if (!token || !candidate) return;
+    setIsUpdatingApplicantStatus(true);
+    setError("");
+    try {
+      const updated = await updateApplicantStatus(candidate.id, token, {
+        applicant_status: nextStatus,
+        note: statusDecisionNote.trim() || null,
+      });
+      setCandidate(updated);
+      if (nextStatus === "shortlisted" || nextStatus === "rejected") {
+        setStatusDecisionNote("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update candidate status");
+    } finally {
+      setIsUpdatingApplicantStatus(false);
+    }
+  };
+
   const onSubmitDecision = async () => {
     if (!token || !candidate) return;
+    if (!canSubmitManagerDecision) {
+      setError("Manager decision is allowed only when interview_schedule_status is interview_done.");
+      return;
+    }
     setIsSubmittingDecision(true);
     setError("");
     try {
@@ -427,6 +530,40 @@ export default function CandidateProfilePage() {
         </p>
       </section>
 
+      {canManualScreeningDecision ? (
+        <section className="panel stack">
+          <h2>Human Screening Decision</h2>
+          <p className="muted">
+            Manual review candidate. Choose whether to move ahead or send rejection.
+          </p>
+          <label>
+            Decision Note (optional)
+            <textarea
+              value={statusDecisionNote}
+              onChange={(event) => setStatusDecisionNote(event.target.value)}
+              rows={3}
+            />
+          </label>
+          <div className="row">
+            <button
+              type="button"
+              onClick={() => onUpdateApplicantStatus("shortlisted")}
+              disabled={isUpdatingApplicantStatus}
+            >
+              {isUpdatingApplicantStatus ? "Updating..." : "Move Ahead"}
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => onUpdateApplicantStatus("rejected")}
+              disabled={isUpdatingApplicantStatus}
+            >
+              {isUpdatingApplicantStatus ? "Updating..." : "Don't Move Ahead"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       <section className="panel stack">
         <h2>Public Profiles</h2>
         <p>
@@ -469,7 +606,21 @@ export default function CandidateProfilePage() {
 
       <section className="panel stack">
         <h2>Resume</h2>
-        <div className="row">
+        <div className="resume-card">
+          <div className="resume-preview-box" aria-label="Resume file preview">
+            <span>{candidate.resume.original_filename || "resume.pdf"}</span>
+          </div>
+          <div className="stack-tight">
+            <p>
+              <strong>File:</strong> {candidate.resume.original_filename || "-"}
+            </p>
+            <p>
+              <strong>Type:</strong> {candidate.resume.content_type || "-"}
+            </p>
+            <p>
+              <strong>Size:</strong> {formatFileSize(candidate.resume.size_bytes)}
+            </p>
+          </div>
           <button type="button" onClick={onDownloadResume} disabled={isDownloadingResume}>
             {isDownloadingResume ? "Preparing download..." : "Download Resume"}
           </button>
@@ -487,7 +638,148 @@ export default function CandidateProfilePage() {
       </section>
 
       <section className="panel stack">
+        <h2>Research Flags and Evidence</h2>
+        {parsedResearch?.parseError ? (
+          <p className="muted">
+            Research summary exists but is in legacy text format. Showing raw summary below.
+          </p>
+        ) : null}
+        {parsedResearch?.legacySummary ? (
+          <p>{parsedResearch.legacySummary}</p>
+        ) : null}
+        <div className="research-summary-grid">
+          <div className="research-summary-card">
+            <p className="research-summary-label">Confidence</p>
+            <p className="research-summary-value">{parsedResearch?.confidence || "-"}</p>
+          </div>
+          <div className="research-summary-card">
+            <p className="research-summary-label">Manual Review Required</p>
+            <p className="research-summary-value">
+              {typeof parsedResearch?.manualReviewRequired === "boolean"
+                ? parsedResearch.manualReviewRequired
+                  ? "Yes"
+                  : "No"
+                : "-"}
+            </p>
+          </div>
+          <div className="research-summary-card">
+            <p className="research-summary-label">High Flags</p>
+            <p className="research-summary-value">{issueCounts.high}</p>
+          </div>
+          <div className="research-summary-card">
+            <p className="research-summary-label">Medium Flags</p>
+            <p className="research-summary-value">{issueCounts.medium}</p>
+          </div>
+        </div>
+        {parsedResearch?.deterministicNotes?.length ? (
+          <div>
+            <strong>Deterministic Notes:</strong>
+            <ul>
+              {parsedResearch.deterministicNotes.map((item, idx) => (
+                <li key={`${idx}-${item.slice(0, 24)}`}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {issueFlags.length ? (
+          <div id="research-issue-flags">
+            <strong>Issue Flags:</strong>
+            <div className="research-issues-grid">
+              {issueFlags.map((item, idx) => {
+                const detailText = String(item.details || "").trim() || "No details provided.";
+                const pretty = tryPrettyJson(detailText);
+                const preview = summarizeText(pretty || detailText, 220);
+                return (
+                  <article
+                    className="research-issue-card"
+                    key={`${idx}-${item.type}-${item.severity}-${item.source}`.slice(0, 80)}
+                  >
+                    <div className="research-issue-head">
+                      <span className={severityBadgeClass(item.severity)}>
+                        {normalizeSeverity(item.severity).toUpperCase()}
+                      </span>
+                      <p className="research-issue-title">{formatIssueType(item.type)}</p>
+                      <p className="research-issue-source">{item.source}</p>
+                    </div>
+                    <p className="research-issue-preview">{preview}</p>
+                    {detailText.length > preview.length ? (
+                      <details className="research-issue-details">
+                        <summary>View full evidence</summary>
+                        <pre>{pretty || detailText}</pre>
+                      </details>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <p className="muted">No issue flags available yet.</p>
+        )}
+        {parsedResearch?.discrepancies?.length ? (
+          <div id="research-discrepancies">
+            <strong>Discrepancies:</strong>
+            <ul>
+              {parsedResearch.discrepancies.map((item, idx) => (
+                <li key={`${idx}-${item.slice(0, 30)}`}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {parsedResearch?.provenance?.length ? (
+          <div id="research-flags-evidence">
+            <strong>Claim Provenance:</strong>
+            <ul>
+              {parsedResearch.provenance.map((item, idx) => (
+                <li key={`${idx}-${item.claim.slice(0, 24)}`}>
+                  <p>{item.claim}</p>
+                  <p className="muted">
+                    {item.evidenceRefs.map((ref, refIdx) => {
+                      const href = evidenceRefHref(ref);
+                      const isExternal = href.startsWith("http://") || href.startsWith("https://");
+                      return (
+                        <span key={`${refIdx}-${ref}`}>
+                          <a
+                            href={href}
+                            target={isExternal ? "_blank" : undefined}
+                            rel={isExternal ? "noreferrer" : undefined}
+                          >
+                            {ref}
+                          </a>
+                          {refIdx < item.evidenceRefs.length - 1 ? ", " : ""}
+                        </span>
+                      );
+                    })}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {parsedResearch?.sourceLinks?.length ? (
+          <div id="research-source-links">
+            <strong>Source Links:</strong>
+            <ul>
+              {parsedResearch.sourceLinks.map((item, idx) => (
+                <li key={`${idx}-${item.url}`}>
+                  <a href={item.url} target="_blank" rel="noreferrer">
+                    {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="panel stack">
         <h2>Manager Decision</h2>
+        {!canSubmitManagerDecision ? (
+          <p className="muted">
+            Manager decision is locked until interview is completed and{" "}
+            <code>interview_schedule_status</code> becomes <code>interview_done</code>.
+          </p>
+        ) : null}
         <div className="row">
           <label>
             <input
@@ -495,6 +787,7 @@ export default function CandidateProfilePage() {
               name="manager_decision"
               checked={decision === "select"}
               onChange={() => setDecision("select")}
+              disabled={!canSubmitManagerDecision}
             />{" "}
             Approve
           </label>
@@ -504,6 +797,7 @@ export default function CandidateProfilePage() {
               name="manager_decision"
               checked={decision === "reject"}
               onChange={() => setDecision("reject")}
+              disabled={!canSubmitManagerDecision}
             />{" "}
             Reject
           </label>
@@ -513,66 +807,73 @@ export default function CandidateProfilePage() {
           <div className="form-grid">
             <label>
               Confirmed Job Title
-              <input
-                value={selectionDetails.confirmed_job_title}
-                onChange={(event) =>
-                  onSelectionDetailsChange("confirmed_job_title", event.target.value)
-                }
-                required
-              />
-            </label>
+                <input
+                  value={selectionDetails.confirmed_job_title}
+                  onChange={(event) =>
+                    onSelectionDetailsChange("confirmed_job_title", event.target.value)
+                  }
+                  disabled={!canSubmitManagerDecision}
+                  required
+                />
+              </label>
             <label>
               Start Date
-              <input
-                type="date"
-                value={selectionDetails.start_date}
-                onChange={(event) => onSelectionDetailsChange("start_date", event.target.value)}
-                required
-              />
-            </label>
+                <input
+                  type="date"
+                  value={selectionDetails.start_date}
+                  onChange={(event) => onSelectionDetailsChange("start_date", event.target.value)}
+                  disabled={!canSubmitManagerDecision}
+                  required
+                />
+              </label>
             <label>
               Base Salary
-              <input
-                value={selectionDetails.base_salary}
-                onChange={(event) => onSelectionDetailsChange("base_salary", event.target.value)}
-                required
-              />
-            </label>
+                <input
+                  value={selectionDetails.base_salary}
+                  onChange={(event) => onSelectionDetailsChange("base_salary", event.target.value)}
+                  disabled={!canSubmitManagerDecision}
+                  required
+                />
+              </label>
             <label>
               Compensation Structure
-              <input
-                value={selectionDetails.compensation_structure}
-                onChange={(event) =>
-                  onSelectionDetailsChange("compensation_structure", event.target.value)
-                }
-                required
-              />
-            </label>
+                <input
+                  value={selectionDetails.compensation_structure}
+                  onChange={(event) =>
+                    onSelectionDetailsChange("compensation_structure", event.target.value)
+                  }
+                  disabled={!canSubmitManagerDecision}
+                  required
+                />
+              </label>
             <label>
               Equity / Bonus (optional)
-              <input
-                value={selectionDetails.equity_or_bonus || ""}
-                onChange={(event) => onSelectionDetailsChange("equity_or_bonus", event.target.value)}
-              />
-            </label>
+                <input
+                  value={selectionDetails.equity_or_bonus || ""}
+                  onChange={(event) => onSelectionDetailsChange("equity_or_bonus", event.target.value)}
+                  disabled={!canSubmitManagerDecision}
+                />
+              </label>
             <label>
               Reporting Manager
-              <input
-                value={selectionDetails.reporting_manager}
-                onChange={(event) =>
-                  onSelectionDetailsChange("reporting_manager", event.target.value)
-                }
-                required
-              />
-            </label>
+                <input
+                  value={selectionDetails.reporting_manager}
+                  onChange={(event) =>
+                    onSelectionDetailsChange("reporting_manager", event.target.value)
+                  }
+                  disabled={!canSubmitManagerDecision}
+                  required
+                />
+              </label>
             <label className="full">
               Custom Terms / Conditions (optional)
-              <textarea
-                value={selectionDetails.custom_terms || ""}
-                onChange={(event) => onSelectionDetailsChange("custom_terms", event.target.value)}
-                rows={4}
-              />
-            </label>
+                <textarea
+                  value={selectionDetails.custom_terms || ""}
+                  onChange={(event) => onSelectionDetailsChange("custom_terms", event.target.value)}
+                  disabled={!canSubmitManagerDecision}
+                  rows={4}
+                />
+              </label>
           </div>
         ) : null}
 
@@ -581,12 +882,17 @@ export default function CandidateProfilePage() {
           <textarea
             value={decisionNote}
             onChange={(event) => setDecisionNote(event.target.value)}
+            disabled={!canSubmitManagerDecision}
             rows={3}
           />
         </label>
 
         <div className="row">
-          <button type="button" onClick={onSubmitDecision} disabled={isSubmittingDecision}>
+          <button
+            type="button"
+            onClick={onSubmitDecision}
+            disabled={isSubmittingDecision || !canSubmitManagerDecision}
+          >
             {isSubmittingDecision
               ? "Submitting..."
               : decision === "select"
@@ -620,10 +926,6 @@ export default function CandidateProfilePage() {
             : "-"}
         </p>
         <p>
-          <strong>Signed Offer S3 Path:</strong>{" "}
-          {candidate.offer_letter_signed_storage_path || "-"}
-        </p>
-        <p>
           <strong>DocuSign Envelope ID:</strong> {candidate.docusign_envelope_id || "-"}
         </p>
         <p>
@@ -638,9 +940,6 @@ export default function CandidateProfilePage() {
         </p>
         <p>
           <strong>Slack Onboarding Status:</strong> {candidate.slack_onboarding_status || "-"}
-        </p>
-        <p>
-          <strong>Slack Error:</strong> {candidate.slack_error || "-"}
         </p>
         <div className="row">
           <button
@@ -687,6 +986,27 @@ export default function CandidateProfilePage() {
 
       <section className="panel stack">
         <h2>Interview Transcript (Fireflies)</h2>
+        <p className="muted">
+          Fireflies transcript usually becomes available after interview completion.
+        </p>
+        <div className="row">
+          <button
+            type="button"
+            className="secondary"
+            disabled={isApplyingFirefliesDemo}
+            onClick={() => onSetFirefliesDemo(true)}
+          >
+            {isApplyingFirefliesDemo ? "Applying..." : "Mock TRUE (Interview Done)"}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            disabled={isApplyingFirefliesDemo}
+            onClick={() => onSetFirefliesDemo(false)}
+          >
+            {isApplyingFirefliesDemo ? "Applying..." : "Mock FALSE (Transcript Pending)"}
+          </button>
+        </div>
         {!fireflies ? (
           <p className="muted">Transcript sync is not available for this interview yet.</p>
         ) : (

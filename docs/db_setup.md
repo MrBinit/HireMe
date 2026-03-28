@@ -105,6 +105,32 @@ This document covers data/storage infrastructure for:
   - `receive_wait_seconds`
   - `visibility_timeout_seconds`
 
+## SQS Webhook Side-Effect Queue
+### Purpose
+- Decouples Slack/Fireflies webhook side effects and deferred confirmation email from API request path.
+- Ensures durable retry behavior via worker + idempotency state.
+
+### Config
+- `app/config/application_config.yaml` under `application.webhook_async`:
+  - `enabled`
+  - `use_queue`
+  - `provider`
+  - `region`
+  - `queue_url`
+  - `enqueue_timeout_seconds`
+  - `max_in_flight_per_worker`
+  - `receive_batch_size`
+  - `receive_wait_seconds`
+  - `visibility_timeout_seconds`
+  - `queue_depth_warning_threshold`
+  - `queue_depth_reject_threshold`
+  - `reject_when_queue_depth_exceeded`
+  - `idempotency_processing_lock_seconds`
+
+### Worker
+- `venv/bin/python -m app.scripts.sqs_webhook_event_worker`
+- Idempotency persistence table: `processed_webhook_events`
+
 ## Runtime Flow
 1. Candidate submits application.
 2. Resume uploads to S3.
@@ -113,6 +139,9 @@ This document covers data/storage infrastructure for:
 5. Worker consumes SQS message and extracts text from PDF/DOCX using LangChain `UnstructuredFileLoader`.
 6. Worker updates parse state/result and projection columns in Postgres.
 7. Worker runs initial screening against job opening requirements/range:
+   - requirements are split into must-have vs nice-to-have for first-layer gating
+   - matching uses normalized token/phrase checks (not raw substring)
+   - min-years is enforced; max-years is optional (`prefilter_enforce_max_years`)
    - fail -> `applicant_status=rejected`, `rejection_reason=Candidate failed in initial screening.`
 8. Admin triggers evaluation endpoint, API enqueues scoring job, and sets `evaluation_status=queued`.
 9. Evaluation worker updates `evaluation_status` (`in_progress -> completed|failed`) and persists AI outputs.
@@ -129,11 +158,27 @@ This document covers data/storage infrastructure for:
    - `cross_checks` (`resume_vs_linkedin`, `resume_vs_github`)
    - `issue_flags` (`experience_mismatch`, `missing_projects`, `skill_differences`)
    - `llm_analysis` (primary/fallback model output)
+   - `deterministic_checks` (`manual_review_required`, `confidence_baseline`, evidence coverage)
    - `brief` (3-5 sentence manager summary)
-14. Optional async queue-backed research enrichment:
+14. API read model exposes a validated typed object field `research_summary` derived from `online_research_summary` (when JSON is valid).
+15. Confidence gate blocks auto progression:
+   - if `manual_review_required=true` or confidence is `low`, candidate is routed to explicit reviewer action
+   - scheduling queue endpoint rejects enqueue (`422`) until reviewer resolves
+16. Research worker logs quality telemetry counters:
+   - `manual_review_required`, `low_confidence`, `high_severity_flags`
+   - `parse_failures`, `fallback_model_usage`, `heuristic_fallback_usage`
+17. Optional async queue-backed research enrichment:
    - enqueue endpoint: `POST /api/v1/admin/candidates/{id}/research/queue`
    - worker: `venv/bin/python -m app.scripts.sqs_research_enrichment_worker`
    - queue URL env: `SQS_RESEARCH_QUEUE_URL`
+
+## Migration policy
+- PostgreSQL schema changes must go through Alembic migrations.
+- Startup schema init is now limited to ORM `create_all` (for empty/local DB bootstrap only).
+- Apply migrations before API/worker rollout:
+  ```bash
+  alembic upgrade head
+  ```
 
 ## Research Enrichment Queue Note
 - Queue mode is implemented for strict enrichment via SQS.

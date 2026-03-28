@@ -40,11 +40,15 @@ application:
   initial_screening_fail_reason: Candidate failed in initial screening.
   ai_score_fail_reason: Candidate did not meet the AI score threshold.
   ai_score_threshold: 70.0
+  ai_score_manual_review_min: 65.0
+  ai_score_manual_review_max: 75.0
+  ai_score_auto_decision_min_confidence: 0.7
   prefilter_min_keyword_length: 3
   prefilter_max_keywords: 24
   prefilter_min_keyword_matches: 5
   prefilter_min_skill_matches: 5
   prefilter_max_search_text_chars: 8000
+  prefilter_enforce_max_years: false
   prefilter_stop_words:
     - and
     - the
@@ -65,6 +69,25 @@ application:
     - team
     - years
     - year
+  webhook_async:
+    enabled: true
+    use_queue: true
+    provider: sqs
+    region: us-east-1
+    queue_name: hireme-webhook-events
+    queue_url: "https://sqs.us-east-1.amazonaws.com/173763384281/hireme-webhook-events"
+    enqueue_timeout_seconds: 2.0
+    worker_concurrency: 4
+    max_in_flight_per_worker: 8
+    receive_batch_size: 10
+    receive_wait_seconds: 20
+    visibility_timeout_seconds: 300
+    max_receive_count: 5
+    queue_depth_warning_threshold: 500
+    queue_depth_reject_threshold: 2000
+    reject_when_queue_depth_exceeded: false
+    queue_depth_cache_seconds: 5
+    idempotency_processing_lock_seconds: 180
 
 docusign:
   enabled: true

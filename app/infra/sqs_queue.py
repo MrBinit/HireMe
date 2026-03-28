@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
+from datetime import datetime
+from time import monotonic
 from typing import Any
 
 import anyio
@@ -26,6 +29,14 @@ from app.services.scheduling_queue import (
     SchedulingQueuePublishError,
     SchedulingQueuePublisher,
 )
+from app.services.webhook_event_queue import (
+    WebhookEventJob,
+    WebhookEventQueueBackpressureError,
+    WebhookEventQueuePublishError,
+    WebhookEventQueuePublisher,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_endpoint_url(value: str | None) -> str | None:
@@ -231,6 +242,132 @@ class SqsSchedulingQueuePublisher(SchedulingQueuePublisher):
         }
 
 
+class SqsWebhookEventQueuePublisher(WebhookEventQueuePublisher):
+    """Publish deferred webhook/email side effects to Amazon SQS."""
+
+    def __init__(
+        self,
+        *,
+        queue_url: str,
+        region: str,
+        endpoint_url: str | None = None,
+        queue_depth_warning_threshold: int = 500,
+        queue_depth_reject_threshold: int = 2000,
+        reject_when_queue_depth_exceeded: bool = False,
+        queue_depth_cache_seconds: int = 5,
+    ) -> None:
+        """Initialize SQS client + lightweight queue-depth backpressure guard."""
+
+        self._queue_url = queue_url
+        self._client = boto3.client(
+            "sqs",
+            region_name=region,
+            endpoint_url=_normalize_endpoint_url(endpoint_url),
+        )
+        self._queue_depth_warning_threshold = max(1, queue_depth_warning_threshold)
+        self._queue_depth_reject_threshold = max(
+            self._queue_depth_warning_threshold,
+            queue_depth_reject_threshold,
+        )
+        self._reject_when_queue_depth_exceeded = bool(reject_when_queue_depth_exceeded)
+        self._queue_depth_cache_seconds = max(0, queue_depth_cache_seconds)
+        self._cached_depth: int | None = None
+        self._cached_depth_at: float | None = None
+
+    async def publish(self, job: WebhookEventJob) -> None:
+        """Send one deferred side-effect job to SQS."""
+
+        await self._enforce_backpressure()
+        message_body = json.dumps(self._to_payload(job), default=str)
+
+        def _run() -> None:
+            self._client.send_message(
+                QueueUrl=self._queue_url,
+                MessageBody=message_body,
+            )
+
+        try:
+            await anyio.to_thread.run_sync(_run)
+        except WebhookEventQueuePublishError:
+            raise
+        except (ClientError, BotoCoreError) as exc:
+            raise WebhookEventQueuePublishError(
+                "failed to publish webhook-event job to SQS"
+            ) from exc
+
+    async def get_approximate_queue_depth(self) -> int | None:
+        """Return approximate queue depth from SQS attributes."""
+
+        depth, _ = await self._read_queue_depth(force_refresh=False)
+        return depth
+
+    async def _enforce_backpressure(self) -> None:
+        """Warn or reject enqueue attempts based on approximate queue depth."""
+
+        depth, refreshed = await self._read_queue_depth(force_refresh=False)
+        if depth is None:
+            return
+        if depth >= self._queue_depth_warning_threshold:
+            logger.warning(
+                "webhook queue depth high depth=%s threshold=%s refreshed=%s",
+                depth,
+                self._queue_depth_warning_threshold,
+                refreshed,
+            )
+        if self._reject_when_queue_depth_exceeded and depth >= self._queue_depth_reject_threshold:
+            raise WebhookEventQueueBackpressureError("webhook queue backlog is high; retry shortly")
+
+    async def _read_queue_depth(self, *, force_refresh: bool) -> tuple[int | None, bool]:
+        """Read or reuse cached queue depth."""
+
+        now = monotonic()
+        if (
+            not force_refresh
+            and self._cached_depth is not None
+            and self._cached_depth_at is not None
+            and (now - self._cached_depth_at) <= self._queue_depth_cache_seconds
+        ):
+            return self._cached_depth, False
+
+        def _run() -> int | None:
+            response = self._client.get_queue_attributes(
+                QueueUrl=self._queue_url,
+                AttributeNames=[
+                    "ApproximateNumberOfMessages",
+                    "ApproximateNumberOfMessagesNotVisible",
+                ],
+            )
+            attrs = response.get("Attributes") or {}
+            visible = int(str(attrs.get("ApproximateNumberOfMessages") or "0"))
+            in_flight = int(str(attrs.get("ApproximateNumberOfMessagesNotVisible") or "0"))
+            return visible + in_flight
+
+        try:
+            depth = await anyio.to_thread.run_sync(_run)
+        except Exception:
+            logger.exception("failed to read webhook queue attributes")
+            return self._cached_depth, False
+
+        self._cached_depth = depth
+        self._cached_depth_at = now
+        return depth, True
+
+    @staticmethod
+    def _to_payload(job: WebhookEventJob) -> dict[str, Any]:
+        """Serialize webhook-event job into queue payload."""
+
+        return {
+            "event_type": job.event_type,
+            "event_key": job.event_key,
+            "payload": job.payload,
+            "queued_at": (
+                job.queued_at.isoformat()
+                if isinstance(job.queued_at, datetime)
+                else str(job.queued_at)
+            ),
+        }
+
+
 @dataclass(frozen=True)
 class SqsMessage:
     """Received SQS message payload."""
@@ -305,3 +442,25 @@ class SqsQueueClient:
             await anyio.to_thread.run_sync(_run)
         except (ClientError, BotoCoreError) as exc:
             raise ParseQueuePublishError("failed to delete message from SQS") from exc
+
+    async def get_approximate_queue_depth(self) -> int | None:
+        """Return approximate total queue depth (visible + in-flight)."""
+
+        def _run() -> int:
+            response = self._client.get_queue_attributes(
+                QueueUrl=self._queue_url,
+                AttributeNames=[
+                    "ApproximateNumberOfMessages",
+                    "ApproximateNumberOfMessagesNotVisible",
+                ],
+            )
+            attrs = response.get("Attributes") or {}
+            visible = int(str(attrs.get("ApproximateNumberOfMessages") or "0"))
+            in_flight = int(str(attrs.get("ApproximateNumberOfMessagesNotVisible") or "0"))
+            return visible + in_flight
+
+        try:
+            return await anyio.to_thread.run_sync(_run)
+        except Exception:
+            logger.exception("failed to fetch sqs queue depth")
+            return None

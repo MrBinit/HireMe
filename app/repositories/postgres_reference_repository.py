@@ -22,12 +22,14 @@ class PostgresReferenceRepository(ReferenceRepository):
         self._session_factory = session_factory
 
     async def create(self, record: ReferenceRecord) -> ReferenceRecord:
-        """Insert one reference record, preventing duplicates by app+referee_email."""
+        """Insert one reference record, preventing duplicate referee identity per application."""
 
         entity = ApplicantReference(
             id=record.id,
             application_id=record.application_id,
             candidate_email=str(record.candidate_email),
+            candidate_name=record.candidate_name,
+            candidate_position=record.candidate_position,
             referee_name=record.referee_name,
             referee_email=str(record.referee_email) if record.referee_email else None,
             referee_phone=record.referee_phone,
@@ -48,7 +50,7 @@ class PostgresReferenceRepository(ReferenceRepository):
             except IntegrityError as exc:
                 await session.rollback()
                 raise DuplicateReferenceError(
-                    "reference already exists for this application and referee email"
+                    "reference already exists for this application and referee identity"
                 ) from exc
 
         return record
@@ -88,6 +90,8 @@ class PostgresReferenceRepository(ReferenceRepository):
             id=entity.id,
             application_id=entity.application_id,
             candidate_email=entity.candidate_email,
+            candidate_name=entity.candidate_name,
+            candidate_position=entity.candidate_position,
             referee_name=entity.referee_name,
             referee_email=entity.referee_email,
             referee_phone=entity.referee_phone,

@@ -10,7 +10,7 @@ from uuid import UUID
 
 import anyio
 from app.core.error import ApplicationValidationError
-from app.core.runtime_config import get_runtime_config
+from app.core.runtime_config import ApplicationRuntimeConfig, get_runtime_config
 from app.core.settings import get_settings
 from app.infra.bedrock_runtime import BedrockRuntimeClient
 from app.infra.database import get_async_session_factory
@@ -22,6 +22,7 @@ from app.infra.sqs_queue import (
 )
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
 from app.repositories.postgres_job_opening_repository import PostgresJobOpeningRepository
+from app.schemas.evaluation import CandidateEvaluationResult
 from app.services.candidate_evaluation_service import CandidateEvaluationService
 from app.services.research_queue import (
     CandidateResearchEnrichmentJob,
@@ -159,14 +160,26 @@ class SqsEvaluationWorker:
         )
         try:
             evaluation = await self._evaluator.evaluate_application(application_id=application_id)
-            summary = CandidateEvaluationService.format_evaluation_summary(evaluation)
             evaluation_score = float(evaluation.score)
+            review_reasons = self._compute_manual_review_reasons(
+                evaluation=evaluation,
+                application_config=runtime_config.application,
+            )
+            needs_human_review = len(review_reasons) > 0
+            summary = CandidateEvaluationService.format_evaluation_summary(evaluation)
+            if needs_human_review:
+                summary = f"{summary} [manual_review_reasons={','.join(review_reasons)}]"
+            if len(summary) > 3900:
+                summary = summary[:3900] + "..."
             updates: dict[str, object] = {
                 "ai_score": evaluation_score,
                 "ai_screening_summary": summary,
                 "evaluation_status": "completed",
             }
-            if evaluation_score < float(runtime_config.application.ai_score_threshold):
+            if needs_human_review:
+                updates["applicant_status"] = "screened"
+                updates["rejection_reason"] = None
+            elif evaluation_score < float(runtime_config.application.ai_score_threshold):
                 updates["applicant_status"] = "rejected"
                 updates["rejection_reason"] = runtime_config.application.ai_score_fail_reason
             else:
@@ -182,16 +195,18 @@ class SqsEvaluationWorker:
                     "candidate not found while persisting evaluation application_id=%s",
                     application_id,
                 )
-            elif evaluation_score >= self._ai_score_threshold:
+            elif (not needs_human_review) and evaluation_score >= self._ai_score_threshold:
                 await self._enqueue_research_if_eligible(application_id)
                 await self._enqueue_scheduling_if_eligible(application_id)
             else:
                 logger.info(
                     "evaluation worker application_id=%s "
-                    "research enqueue skipped ai_score=%s threshold=%s",
+                    "research enqueue skipped ai_score=%s threshold=%s review=%s reasons=%s",
                     application_id,
                     evaluation_score,
                     self._ai_score_threshold,
+                    needs_human_review,
+                    ",".join(review_reasons) if review_reasons else "",
                 )
         except ApplicationValidationError as exc:
             error_message = str(exc)
@@ -228,6 +243,31 @@ class SqsEvaluationWorker:
             return
 
         await self._safe_delete(message)
+
+    @staticmethod
+    def _compute_manual_review_reasons(
+        *,
+        evaluation: CandidateEvaluationResult,
+        application_config: ApplicationRuntimeConfig,
+    ) -> list[str]:
+        """Return deterministic reasons requiring human review."""
+
+        reasons: list[str] = []
+        review_min = float(application_config.ai_score_manual_review_min)
+        review_max = float(application_config.ai_score_manual_review_max)
+        if review_min > review_max:
+            review_min, review_max = review_max, review_min
+
+        score = float(evaluation.score)
+        if review_min <= score <= review_max:
+            reasons.append("score_band")
+        if float(evaluation.confidence) < float(
+            application_config.ai_score_auto_decision_min_confidence
+        ):
+            reasons.append("low_confidence")
+        if bool(evaluation.needs_human_review):
+            reasons.append("model_flag")
+        return reasons
 
     async def _enqueue_research_if_eligible(self, application_id: UUID) -> None:
         """Queue research enrichment only after successful AI evaluation threshold pass."""

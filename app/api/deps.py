@@ -24,12 +24,17 @@ from app.infra.sqs_queue import SqsParseQueuePublisher
 from app.infra.sqs_queue import SqsEvaluationQueuePublisher
 from app.infra.sqs_queue import SqsResearchQueuePublisher
 from app.infra.sqs_queue import SqsSchedulingQueuePublisher
+from app.infra.sqs_queue import SqsWebhookEventQueuePublisher
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.job_opening_repository import JobOpeningRepository
 from app.repositories.postgres_application_repository import PostgresApplicationRepository
 from app.repositories.postgres_job_opening_repository import PostgresJobOpeningRepository
 from app.repositories.postgres_reference_repository import PostgresReferenceRepository
+from app.repositories.postgres_webhook_event_dedupe_repository import (
+    PostgresWebhookEventDedupeRepository,
+)
 from app.repositories.reference_repository import ReferenceRepository
+from app.repositories.webhook_event_dedupe_repository import WebhookEventDedupeRepository
 from app.services.application_service import ApplicationService
 from app.services.admin_auth_service import AdminAuthService
 from app.services.email_sender import EmailSender, NoopEmailSender
@@ -46,6 +51,10 @@ from app.services.research_queue import (
 from app.services.scheduling_queue import (
     NoopSchedulingQueuePublisher,
     SchedulingQueuePublisher,
+)
+from app.services.webhook_event_queue import (
+    NoopWebhookEventQueuePublisher,
+    WebhookEventQueuePublisher,
 )
 from app.services.reference_service import ReferenceService
 from app.services.resume_storage import ResumeStorage, S3ResumeStorage
@@ -218,6 +227,47 @@ def get_scheduling_queue_publisher() -> SchedulingQueuePublisher:
     )
 
 
+@lru_cache(maxsize=1)
+def get_webhook_event_queue_publisher() -> WebhookEventQueuePublisher:
+    """Return webhook-event queue publisher based on runtime config and env."""
+
+    runtime_config = get_runtime_config()
+    settings = get_settings()
+    webhook_async = runtime_config.application.webhook_async
+
+    if not webhook_async.enabled:
+        return NoopWebhookEventQueuePublisher()
+    if not webhook_async.use_queue:
+        return NoopWebhookEventQueuePublisher()
+    if webhook_async.provider != "sqs":
+        return NoopWebhookEventQueuePublisher()
+    if not webhook_async.queue_url:
+        raise RuntimeError(
+            "application.webhook_async.queue_url is required when "
+            "application.webhook_async.use_queue=true and provider=sqs"
+        )
+
+    return SqsWebhookEventQueuePublisher(
+        queue_url=webhook_async.queue_url,
+        region=webhook_async.region,
+        endpoint_url=_normalize_optional_endpoint_url(settings.sqs_endpoint_url),
+        queue_depth_warning_threshold=webhook_async.queue_depth_warning_threshold,
+        queue_depth_reject_threshold=webhook_async.queue_depth_reject_threshold,
+        reject_when_queue_depth_exceeded=webhook_async.reject_when_queue_depth_exceeded,
+        queue_depth_cache_seconds=webhook_async.queue_depth_cache_seconds,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_webhook_event_dedupe_repository() -> WebhookEventDedupeRepository:
+    """Return webhook idempotency repository."""
+
+    runtime_config = get_runtime_config()
+    return PostgresWebhookEventDedupeRepository(
+        session_factory=get_async_session_factory(runtime_config.postgres)
+    )
+
+
 def _build_smtp_sender(
     *,
     config: NotificationRuntimeConfig,
@@ -317,12 +367,17 @@ def get_application_service() -> ApplicationService:
         resume_storage=get_resume_storage(),
         parse_config=runtime_config.parse,
         parse_queue_publisher=get_parse_queue_publisher(),
+        research_enrichment_config=runtime_config.research.enrichment,
+        research_queue_publisher=get_research_queue_publisher(),
+        scheduling_config=runtime_config.scheduling,
+        scheduling_queue_publisher=get_scheduling_queue_publisher(),
         notification_config=runtime_config.notification,
         email_sender=get_email_sender(),
         offer_letter_service=get_offer_letter_service(),
         docusign_service=get_docusign_service(),
         slack_service=get_slack_service(),
         slack_welcome_service=get_slack_welcome_service(),
+        webhook_event_queue_publisher=get_webhook_event_queue_publisher(),
         s3_store=get_s3_store(),
         s3_bucket=runtime_config.s3.bucket,
     )
@@ -505,6 +560,18 @@ def get_scheduling_queue_publisher_dep() -> SchedulingQueuePublisher:
     """FastAPI dependency wrapper for scheduling queue publisher."""
 
     return get_scheduling_queue_publisher()
+
+
+def get_webhook_event_queue_publisher_dep() -> WebhookEventQueuePublisher:
+    """FastAPI dependency wrapper for webhook-event queue publisher."""
+
+    return get_webhook_event_queue_publisher()
+
+
+def get_webhook_event_dedupe_repository_dep() -> WebhookEventDedupeRepository:
+    """FastAPI dependency wrapper for webhook idempotency repository."""
+
+    return get_webhook_event_dedupe_repository()
 
 
 @lru_cache(maxsize=1)

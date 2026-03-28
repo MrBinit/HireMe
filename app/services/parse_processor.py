@@ -52,6 +52,15 @@ class ParsedResume:
 class ResumeParseProcessor:
     """Update parse lifecycle fields for queued applications."""
 
+    _PREFILTER_TOKEN_ALIASES: dict[str, str] = {
+        "js": "javascript",
+        "ts": "typescript",
+        "py": "python",
+        "golang": "go",
+        "node.js": "nodejs",
+        "node": "nodejs",
+    }
+
     def __init__(
         self,
         *,
@@ -460,19 +469,48 @@ class ResumeParseProcessor:
             value=parsed_total_years_experience,
             min_years=min_years,
             max_years=max_years,
+            enforce_max_years=self._application_config.prefilter_enforce_max_years,
         )
 
-        keywords = self._extract_prefilter_keywords(opening.requirements, opening.responsibilities)
-        skill_keywords = self._extract_required_skill_keywords(opening.requirements)
-        candidate_skills_text = " ".join(self._normalize_strings(parsed_skills)).casefold()
-        matched_skills = [item for item in skill_keywords if item in candidate_skills_text]
+        must_have_requirements, nice_to_have_requirements = self._split_requirements_by_priority(
+            opening.requirements
+        )
+        keywords = self._extract_prefilter_keywords(
+            must_have_requirements, opening.responsibilities
+        )
+        skill_keywords = self._extract_required_skill_keywords(must_have_requirements)
+        candidate_skills_tokens = self._tokenize_prefilter_text(
+            " ".join(self._normalize_strings(parsed_skills))
+        )
+        candidate_skills_token_set = set(candidate_skills_tokens)
+        candidate_skills_text = " ".join(candidate_skills_tokens)
+        matched_skills = [
+            item
+            for item in skill_keywords
+            if self._contains_prefilter_term(
+                term=item,
+                token_set=candidate_skills_token_set,
+                token_text=candidate_skills_text,
+            )
+        ]
         required_skill_matches = min(
             len(skill_keywords),
             max(1, self._application_config.prefilter_min_skill_matches),
         )
         skills_pass = True if not skill_keywords else len(matched_skills) >= required_skill_matches
 
-        matched_keywords = [item for item in keywords if item in parsed_search_text]
+        search_tokens = self._tokenize_prefilter_text(parsed_search_text)
+        search_token_set = set(search_tokens)
+        search_text = " ".join(search_tokens)
+        matched_keywords = [
+            item
+            for item in keywords
+            if self._contains_prefilter_term(
+                term=item,
+                token_set=search_token_set,
+                token_text=search_text,
+            )
+        ]
         required_keyword_matches = min(
             len(keywords),
             max(1, self._application_config.prefilter_min_keyword_matches),
@@ -495,8 +533,105 @@ class ResumeParseProcessor:
             "required_keyword_matches": required_keyword_matches if keywords else 0,
             "matched_keyword_count": len(matched_keywords),
             "sample_matched_keywords": matched_keywords[:8],
-            "screening_rule": "experience_and_(skills_or_keywords)",
+            "must_have_requirements_count": len(must_have_requirements),
+            "nice_to_have_requirements_count": len(nice_to_have_requirements),
+            "enforce_max_years": self._application_config.prefilter_enforce_max_years,
+            "screening_rule": (
+                "min_experience_and_(skills_or_keywords)"
+                if not self._application_config.prefilter_enforce_max_years
+                else "experience_and_(skills_or_keywords)"
+            ),
         }
+
+    def _split_requirements_by_priority(
+        self,
+        requirements: list[str],
+    ) -> tuple[list[str], list[str]]:
+        """Split requirement bullets into must-have and nice-to-have lists."""
+
+        must_have: list[str] = []
+        nice_to_have: list[str] = []
+
+        for raw in requirements:
+            if not isinstance(raw, str):
+                continue
+            cleaned = " ".join(raw.split()).strip()
+            if not cleaned:
+                continue
+
+            label_match = re.match(
+                r"^(must(?:\s+have)?|required|requirement|required skill|"
+                r"nice(?:\s+to\s+have)?|preferred|optional|plus)\s*[:\-]\s*(.+)$",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+            if label_match:
+                label = label_match.group(1).casefold()
+                content = " ".join(label_match.group(2).split()).strip()
+                if not content:
+                    continue
+                if label in {"nice", "nice to have", "preferred", "optional", "plus"}:
+                    nice_to_have.append(content)
+                else:
+                    must_have.append(content)
+                continue
+
+            lowered = cleaned.casefold()
+            if re.match(r"^(nice(?:\s+to\s+have)?|preferred|optional|plus)\b", lowered):
+                content = re.sub(
+                    r"^(nice(?:\s+to\s+have)?|preferred|optional|plus)\b",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                ).lstrip(" :-")
+                nice_to_have.append(content or cleaned)
+                continue
+            if re.match(r"^(must(?:\s+have)?|required|requirement|required skill)\b", lowered):
+                content = re.sub(
+                    r"^(must(?:\s+have)?|required|requirement|required skill)\b",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                ).lstrip(" :-")
+                must_have.append(content or cleaned)
+                continue
+
+            # Backward compatible default: unlabeled requirements are treated as must-have.
+            must_have.append(cleaned)
+
+        return must_have, nice_to_have
+
+    @classmethod
+    def _canonicalize_prefilter_token(cls, token: str) -> str:
+        """Normalize one token to canonical form for matching."""
+
+        return cls._PREFILTER_TOKEN_ALIASES.get(token, token)
+
+    @classmethod
+    def _tokenize_prefilter_text(cls, text: str) -> list[str]:
+        """Tokenize and canonicalize text for prefilter matching."""
+
+        normalized = " ".join(re.findall(r"[a-z0-9\+\#\.]{2,}", text.casefold()))
+        tokens = [item for item in normalized.split(" ") if item]
+        return [cls._canonicalize_prefilter_token(item) for item in tokens]
+
+    @classmethod
+    def _contains_prefilter_term(
+        cls,
+        *,
+        term: str,
+        token_set: set[str],
+        token_text: str,
+    ) -> bool:
+        """Return True when canonicalized term appears as token/phrase in target text."""
+
+        term_tokens = cls._tokenize_prefilter_text(term)
+        if not term_tokens:
+            return False
+        if len(term_tokens) == 1:
+            return term_tokens[0] in token_set
+        phrase = " ".join(term_tokens)
+        return f" {phrase} " in f" {token_text} "
 
     def _extract_required_skill_keywords(self, requirements: list[str]) -> list[str]:
         """Extract normalized skill-focused keywords from job requirements text."""
@@ -549,6 +684,7 @@ class ResumeParseProcessor:
         value: float | None,
         min_years: float | None,
         max_years: float | None,
+        enforce_max_years: bool,
     ) -> bool:
         """Return True when experience falls within parsed bounds."""
 
@@ -558,7 +694,7 @@ class ResumeParseProcessor:
             return False
         if min_years is not None and value < min_years:
             return False
-        if max_years is not None and value > max_years:
+        if enforce_max_years and max_years is not None and value > max_years:
             return False
         return True
 

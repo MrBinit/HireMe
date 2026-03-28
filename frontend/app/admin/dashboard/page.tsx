@@ -314,7 +314,17 @@ export default function AdminDashboardPage() {
             </label>
             <label className="full">
               Requirements (one per line)
-              <textarea name="requirements" required />
+              <textarea
+                name="requirements"
+                required
+                placeholder={
+                  "Must: Python\nMust: FastAPI\nNice to have: AWS\nNice to have: Kubernetes"
+                }
+              />
+              <small>
+                Prefix lines with <code>Must:</code> or <code>Nice to have:</code>. Unlabeled lines
+                are treated as must-have.
+              </small>
             </label>
           </div>
           <button type="submit">Create Job</button>

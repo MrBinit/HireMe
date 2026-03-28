@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import json
 import logging
 from uuid import UUID
@@ -14,9 +15,9 @@ from app.core.settings import get_settings
 from app.infra.bedrock_runtime import BedrockRuntimeClient
 from app.infra.sqs_queue import SqsMessage, SqsQueueClient
 from app.scripts.enrich_shortlisted_llm_profiles import (
-    _enrich_one_candidate,
-    _load_candidates,
-    _persist_payload,
+    enrich_one_candidate,
+    load_candidates,
+    persist_payload,
 )
 
 logging.basicConfig(
@@ -24,6 +25,19 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class ResearchQualityTelemetry:
+    """In-memory counters for research quality and reliability signals."""
+
+    processed: int = 0
+    manual_review_required: int = 0
+    low_confidence: int = 0
+    high_severity_flags: int = 0
+    parse_failures: int = 0
+    fallback_model_usage: int = 0
+    heuristic_fallback_usage: int = 0
 
 
 class SqsResearchEnrichmentWorker:
@@ -51,6 +65,8 @@ class SqsResearchEnrichmentWorker:
         self._receive_batch_size = max(1, min(receive_batch_size, 10))
         self._receive_wait_seconds = max(0, min(receive_wait_seconds, 20))
         self._visibility_timeout_seconds = max(1, visibility_timeout_seconds)
+        self._telemetry = ResearchQualityTelemetry()
+        self._telemetry_lock = asyncio.Lock()
 
     async def run_forever(self) -> None:
         """Run the worker forever and process messages in bounded parallelism."""
@@ -108,7 +124,7 @@ class SqsResearchEnrichmentWorker:
 
         logger.info("research worker application_id=%s job started", application_id)
         try:
-            candidates = await _load_candidates(
+            candidates = await load_candidates(
                 config=self._research_config,
                 offset=0,
                 limit=1,
@@ -123,14 +139,15 @@ class SqsResearchEnrichmentWorker:
                 return
             candidate = candidates[0]
             logger.info("research worker application_id=%s candidate loaded", application_id)
-            payload = await _enrich_one_candidate(
+            payload = await enrich_one_candidate(
                 candidate=candidate,
                 config=self._research_config,
                 bedrock_client=self._bedrock_client,
                 bedrock_config=self._bedrock_config,
             )
             logger.info("research worker application_id=%s enrich pipeline done", application_id)
-            await _persist_payload(
+            await self._record_telemetry(application_id=application_id, payload=payload)
+            await persist_payload(
                 candidate_id=application_id,
                 payload=payload,
                 max_chars=self._research_config.enrichment.max_research_json_chars,
@@ -145,6 +162,90 @@ class SqsResearchEnrichmentWorker:
 
         await self._safe_delete(message)
         logger.info("research worker application_id=%s message acked", application_id)
+
+    async def _record_telemetry(
+        self,
+        *,
+        application_id: UUID,
+        payload: dict[str, object],
+    ) -> None:
+        """Collect and log candidate-level + aggregate research quality counters."""
+
+        deterministic = (
+            payload.get("deterministic_checks")
+            if isinstance(payload.get("deterministic_checks"), dict)
+            else {}
+        )
+        llm = payload.get("llm_analysis") if isinstance(payload.get("llm_analysis"), dict) else {}
+        issue_flags_raw = payload.get("issue_flags")
+        issue_flags = issue_flags_raw if isinstance(issue_flags_raw, list) else []
+
+        manual_review_required = bool(
+            isinstance(deterministic, dict) and deterministic.get("manual_review_required")
+        )
+        confidence_value = ""
+        if isinstance(llm, dict) and isinstance(llm.get("confidence"), str):
+            confidence_value = str(llm.get("confidence")).strip().casefold()
+        elif isinstance(deterministic, dict) and isinstance(
+            deterministic.get("confidence_baseline"), str
+        ):
+            confidence_value = str(deterministic.get("confidence_baseline")).strip().casefold()
+        low_confidence = confidence_value == "low"
+
+        high_severity_flags = sum(
+            1
+            for item in issue_flags
+            if isinstance(item, dict) and str(item.get("severity") or "").casefold() == "high"
+        )
+
+        llm_source = (
+            str(llm.get("source") or "").strip().casefold() if isinstance(llm, dict) else ""
+        )
+        model_id = str(llm.get("model_id") or "").strip() if isinstance(llm, dict) else ""
+        used_fallback_model = bool(model_id) and model_id == self._bedrock_config.fallback_model_id
+        used_heuristic_fallback = llm_source == "heuristic_fallback"
+        parse_failure = (
+            self._research_config.enrichment.llm_analysis_enabled and llm_source != "model"
+        )
+
+        logger.info(
+            "research quality candidate=%s manual_review_required=%s confidence=%s "
+            "high_severity_flags=%s llm_source=%s fallback_model_used=%s",
+            application_id,
+            manual_review_required,
+            confidence_value or "unknown",
+            high_severity_flags,
+            llm_source or "unknown",
+            used_fallback_model,
+        )
+
+        async with self._telemetry_lock:
+            self._telemetry.processed += 1
+            if manual_review_required:
+                self._telemetry.manual_review_required += 1
+            if low_confidence:
+                self._telemetry.low_confidence += 1
+            self._telemetry.high_severity_flags += high_severity_flags
+            if parse_failure:
+                self._telemetry.parse_failures += 1
+            if used_fallback_model:
+                self._telemetry.fallback_model_usage += 1
+            if used_heuristic_fallback:
+                self._telemetry.heuristic_fallback_usage += 1
+
+            if self._telemetry.processed % 25 == 0:
+                logger.info(
+                    "research quality aggregate processed=%s manual_review_required=%s "
+                    "low_confidence=%s high_severity_flags=%s parse_failures=%s "
+                    "fallback_model_usage=%s heuristic_fallback_usage=%s",
+                    self._telemetry.processed,
+                    self._telemetry.manual_review_required,
+                    self._telemetry.low_confidence,
+                    self._telemetry.high_severity_flags,
+                    self._telemetry.parse_failures,
+                    self._telemetry.fallback_model_usage,
+                    self._telemetry.heuristic_fallback_usage,
+                )
 
     async def _safe_delete(self, message: SqsMessage) -> None:
         """Delete message and log failures without crashing worker loop."""

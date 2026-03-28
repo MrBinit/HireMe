@@ -9,7 +9,12 @@ from uuid import uuid4
 from app.core.error import ReferenceValidationError
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.reference_repository import DuplicateReferenceError, ReferenceRepository
-from app.schemas.reference import ReferenceCreatePayload, ReferenceListResponse, ReferenceRecord
+from app.schemas.reference import (
+    RefereeReferenceCreatePayload,
+    ReferenceCreatePayload,
+    ReferenceListResponse,
+    ReferenceRecord,
+)
 
 
 class ReferenceService:
@@ -44,6 +49,16 @@ class ReferenceService:
             id=uuid4(),
             application_id=payload.application_id,
             candidate_email=payload.candidate_email,
+            candidate_name=(
+                payload.candidate_name.strip()
+                if payload.candidate_name
+                else application.full_name.strip()
+            ),
+            candidate_position=(
+                payload.candidate_position.strip()
+                if payload.candidate_position
+                else application.role_selection.strip()
+            ),
             referee_name=payload.referee_name.strip(),
             referee_email=payload.referee_email,
             referee_phone=payload.referee_phone.strip() if payload.referee_phone else None,
@@ -70,6 +85,26 @@ class ReferenceService:
             raise ReferenceValidationError("failed to update candidate reference status")
 
         return created
+
+    async def create_from_referee(self, payload: RefereeReferenceCreatePayload) -> ReferenceRecord:
+        """Create reference from referee submission using applicant email lookup."""
+
+        applicant_email = str(payload.applicant_email).strip().casefold()
+        application = await self._application_repository.get_latest_by_email(email=applicant_email)
+        if application is None:
+            raise ReferenceValidationError("Sorry, no applicant found with this email.")
+
+        return await self.create(
+            ReferenceCreatePayload(
+                application_id=application.id,
+                candidate_email=application.email,
+                candidate_name=payload.applicant_name,
+                candidate_position=payload.applicant_position,
+                referee_name=payload.referee_name,
+                referee_email=payload.referee_email,
+                notes=payload.referee_note,
+            )
+        )
 
     async def list(
         self,

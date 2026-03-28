@@ -108,5 +108,31 @@ Short, structured onboarding text does not require the strongest model.
 
 ---
 
+## 6) API Fast-ACK Background Tasks: Response Latency vs Durability
+
+### Decision
+We shifted heavy webhook work (Slack team-join onboarding and Fireflies transcript post-processing) and application confirmation email off the immediate request path and onto durable SQS jobs.
+
+### Assumption
+Fast ACK + queue handoff should be the default contract for webhook reliability and operational safety.
+
+### Trade-off
+- Better request reliability and lower timeout risk during external API calls.
+- Added queue/worker complexity and a requirement to run an additional worker process.
+
+### Impact
+- API endpoints respond faster and avoid blocking on long network workflows.
+- Side effects survive API restarts because processing is decoupled into queue workers.
+
+### Implemented hardening
+- Deferred webhook/email side effects now run via queue-backed worker (`sqs_webhook_event_worker`).
+- Added persisted idempotency keys/state (`processed_webhook_events`) for replay-safe processing.
+- Added queue-depth warning/reject thresholds for webhook enqueue backpressure.
+
+### Remaining infra hardening
+- Enable DLQ + replay runbook in deployment infrastructure.
+
+---
+
 ## Overall Rationale
 The core strategy was: **ship reliable workflow first, then harden precision and quality**. We optimized for operational continuity, cost control, and reviewability, while documenting the areas that need deeper robustness work.

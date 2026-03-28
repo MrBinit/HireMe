@@ -1,5 +1,6 @@
 """API routes for candidate application submission."""
 
+import logging
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -46,6 +47,7 @@ from app.services.application_service import ApplicationService, ApplicationVali
 from app.services.interview_scheduling_service import InterviewSchedulingService
 
 router = APIRouter(tags=["applications"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/roles", response_model=list[str])
@@ -63,7 +65,7 @@ async def submit_application(
     email: str = Form(...),
     linkedin_url: str = Form(...),
     portfolio_url: str | None = Form(default=None),
-    github_url: str = Form(...),
+    github_url: str | None = Form(default=None),
     twitter_url: str | None = Form(default=None),
     role_selection: str = Form(...),
     resume: UploadFile = File(...),
@@ -76,7 +78,7 @@ async def submit_application(
         "email": email,
         "linkedin_url": linkedin_url,
         "portfolio_url": portfolio_url or None,
-        "github_url": github_url,
+        "github_url": github_url or None,
         "twitter_url": twitter_url or None,
         "role_selection": role_selection,
     }
@@ -89,7 +91,19 @@ async def submit_application(
             detail=exc.errors(),
         ) from exc
 
-    return await service.submit(payload=payload, resume=resume)
+    created = await service.submit(
+        payload=payload,
+        resume=resume,
+        send_confirmation_email=False,
+    )
+    try:
+        await service.enqueue_application_confirmation_email(application_id=created.id)
+    except ApplicationValidationError:
+        logger.exception(
+            "application confirmation email enqueue failed application_id=%s",
+            created.id,
+        )
+    return created
 
 
 @router.get(
@@ -406,6 +420,7 @@ async def docusign_webhook_callback(
         processed = await service.handle_docusign_webhook(
             application_id=application_id,
             webhook_token=token,
+            webhook_signature=request.headers.get("x-docusign-signature-1"),
             raw_body=await request.body(),
             content_type=request.headers.get("content-type"),
         )

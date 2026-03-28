@@ -96,6 +96,9 @@ async def _create_opening(
     job_service: JobOpeningService,
     *,
     role_title: str,
+    experience_range: str = "2-4 years",
+    responsibilities: list[str] | None = None,
+    requirements: list[str] | None = None,
 ) -> None:
     """Create one job opening for parse tests."""
 
@@ -106,11 +109,11 @@ async def _create_opening(
             team="Platform",
             location="remote",
             experience_level="mid",
-            experience_range="2-4 years",
+            experience_range=experience_range,
             application_open_at=datetime.now(tz=timezone.utc) - timedelta(days=1),
             application_close_at=datetime.now(tz=timezone.utc) + timedelta(days=7),
-            responsibilities=["Build backend APIs"],
-            requirements=["Python", "FastAPI"],
+            responsibilities=responsibilities or ["Build backend APIs"],
+            requirements=requirements or ["Python", "FastAPI"],
         )
     )
 
@@ -268,5 +271,183 @@ def test_initial_screening_failure_sends_rejection_email(tmp_path: Path) -> None
         assert len(email_sender.rejection_payloads) == 1
         assert email_sender.rejection_payloads[0].candidate_email == "reject-me@example.com"
         assert email_sender.confirmation_payloads == []
+
+    asyncio.run(run())
+
+
+def test_initial_screening_allows_overqualified_when_max_years_soft(tmp_path: Path) -> None:
+    """Over max experience should still pass when max-years gate is soft."""
+
+    async def run() -> None:
+        app_repo = LocalApplicationRepository(tmp_path / "applications.json")
+        job_repo = LocalJobOpeningRepository(tmp_path / "job_openings.json")
+        job_service = JobOpeningService(job_repo, JobOpeningRuntimeConfig())
+
+        role_title = f"Senior Engineer {uuid4().hex[:6]}"
+        await _create_opening(
+            job_service,
+            role_title=role_title,
+            experience_range="2-4 years",
+            requirements=["Python"],
+        )
+        opening = await job_repo.find_by_role_title(role_title)
+        assert opening is not None
+        created = await app_repo.create(
+            _build_application(role_title, "overqualified@example.com").model_copy(
+                update={"job_opening_id": opening.id}
+            )
+        )
+
+        processor = ResumeParseProcessor(
+            repository=app_repo,
+            job_opening_repository=job_repo,
+            application_config=ApplicationRuntimeConfig(
+                prefilter_min_keyword_matches=1,
+                prefilter_min_skill_matches=1,
+                prefilter_enforce_max_years=False,
+            ),
+            extractor=_FakeExtractor("Python engineering profile"),
+            structured_extractor=_FakeStructuredExtractor(
+                {
+                    "skills": ["Python"],
+                    "total_years_experience": 8.0,
+                    "education": [],
+                    "work_history": [],
+                }
+            ),
+            llm_fallback_min_chars=400,
+            prefilter_max_search_text_chars=8000,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+            email_sender=_CaptureEmailSender(),
+        )
+
+        assert await processor.process(created.id) is True
+        saved = await app_repo.get_by_id(created.id)
+        assert saved is not None
+        assert isinstance(saved.parse_result, dict)
+        screening = saved.parse_result.get("initial_screening")
+        assert isinstance(screening, dict)
+        assert screening.get("experience_pass") is True
+        assert screening.get("enforce_max_years") is False
+        assert screening.get("passed") is True
+        assert saved.applicant_status == "screened"
+
+    asyncio.run(run())
+
+
+def test_initial_screening_skill_match_avoids_substring_false_positive(tmp_path: Path) -> None:
+    """Term 'go' should not match candidate skill 'mongodb'."""
+
+    async def run() -> None:
+        app_repo = LocalApplicationRepository(tmp_path / "applications.json")
+        job_repo = LocalJobOpeningRepository(tmp_path / "job_openings.json")
+        job_service = JobOpeningService(job_repo, JobOpeningRuntimeConfig())
+
+        role_title = f"Go Engineer {uuid4().hex[:6]}"
+        await _create_opening(
+            job_service,
+            role_title=role_title,
+            requirements=["Go"],
+        )
+        opening = await job_repo.find_by_role_title(role_title)
+        assert opening is not None
+        created = await app_repo.create(
+            _build_application(role_title, "substring-noise@example.com").model_copy(
+                update={"job_opening_id": opening.id}
+            )
+        )
+
+        processor = ResumeParseProcessor(
+            repository=app_repo,
+            job_opening_repository=job_repo,
+            application_config=ApplicationRuntimeConfig(
+                prefilter_min_keyword_length=2,
+                prefilter_min_keyword_matches=1,
+                prefilter_min_skill_matches=1,
+            ),
+            extractor=_FakeExtractor("MongoDB-heavy profile"),
+            structured_extractor=_FakeStructuredExtractor(
+                {
+                    "skills": ["MongoDB"],
+                    "total_years_experience": 3.0,
+                    "education": [],
+                    "work_history": [],
+                }
+            ),
+            llm_fallback_min_chars=400,
+            prefilter_max_search_text_chars=8000,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+            email_sender=_CaptureEmailSender(),
+        )
+
+        assert await processor.process(created.id) is True
+        saved = await app_repo.get_by_id(created.id)
+        assert saved is not None
+        assert isinstance(saved.parse_result, dict)
+        screening = saved.parse_result.get("initial_screening")
+        assert isinstance(screening, dict)
+        assert screening.get("matched_skill_count") == 0
+        assert screening.get("skills_pass") is False
+        assert screening.get("passed") is False
+        assert saved.applicant_status == "rejected"
+
+    asyncio.run(run())
+
+
+def test_initial_screening_uses_must_have_requirements_for_gating(tmp_path: Path) -> None:
+    """Must-have skill should gate pass; nice-to-have should not be required."""
+
+    async def run() -> None:
+        app_repo = LocalApplicationRepository(tmp_path / "applications.json")
+        job_repo = LocalJobOpeningRepository(tmp_path / "job_openings.json")
+        job_service = JobOpeningService(job_repo, JobOpeningRuntimeConfig())
+
+        role_title = f"Split Req Engineer {uuid4().hex[:6]}"
+        await _create_opening(
+            job_service,
+            role_title=role_title,
+            requirements=["Must: Python", "Nice to have: Rust"],
+        )
+        opening = await job_repo.find_by_role_title(role_title)
+        assert opening is not None
+        created = await app_repo.create(
+            _build_application(role_title, "must-only@example.com").model_copy(
+                update={"job_opening_id": opening.id}
+            )
+        )
+
+        processor = ResumeParseProcessor(
+            repository=app_repo,
+            job_opening_repository=job_repo,
+            application_config=ApplicationRuntimeConfig(
+                prefilter_min_keyword_matches=5,
+                prefilter_min_skill_matches=1,
+            ),
+            extractor=_FakeExtractor("Python backend profile"),
+            structured_extractor=_FakeStructuredExtractor(
+                {
+                    "skills": ["Python"],
+                    "total_years_experience": 3.0,
+                    "education": [],
+                    "work_history": [],
+                }
+            ),
+            llm_fallback_min_chars=400,
+            prefilter_max_search_text_chars=8000,
+            notification_config=NotificationRuntimeConfig(enabled=False),
+            email_sender=_CaptureEmailSender(),
+        )
+
+        assert await processor.process(created.id) is True
+        saved = await app_repo.get_by_id(created.id)
+        assert saved is not None
+        assert isinstance(saved.parse_result, dict)
+        screening = saved.parse_result.get("initial_screening")
+        assert isinstance(screening, dict)
+        assert screening.get("must_have_requirements_count") == 1
+        assert screening.get("nice_to_have_requirements_count") == 1
+        assert screening.get("skills_pass") is True
+        assert screening.get("passed") is True
+        assert saved.applicant_status == "screened"
 
     asyncio.run(run())

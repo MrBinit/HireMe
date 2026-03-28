@@ -157,6 +157,26 @@ class S3ApplicationRepository(ApplicationRepository):
                 return record
         return None
 
+    async def get_by_confirmed_meeting_link(self, *, meeting_link: str) -> ApplicationRecord | None:
+        """Return latest application with matching confirmed meeting link."""
+
+        target = meeting_link.strip().rstrip("/").casefold()
+        if not target:
+            return None
+
+        records, _ = await self.list(offset=0, limit=1_000_000)
+        for record in records:
+            payload = record.interview_schedule_options
+            if not isinstance(payload, dict):
+                continue
+            stored_link = payload.get("confirmed_meeting_link")
+            if (
+                isinstance(stored_link, str)
+                and stored_link.strip().rstrip("/").casefold() == target
+            ):
+                return record
+        return None
+
     async def update_parse_state(
         self,
         *,

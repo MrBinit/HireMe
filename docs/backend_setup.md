@@ -50,6 +50,7 @@
     - `work_experience` (position, company/old office, duration, job_description)
     - `old_offices`
     - `key_achievements`
+    - `initial_screening` metadata (including matched counts, rule, and must-have/nice-to-have split counts)
   - `parse_status` (default `pending`)
   - `applicant_status` (default `applied`)
   - `applicant_status` is auto-updated to `shortlisted` when AI score is `>= ai_score_threshold`
@@ -93,7 +94,7 @@
 - `POST /api/v1/admin/login` (admin username/password -> JWT bearer token)
 - `GET /api/v1/admin/candidates` (admin list candidates, optional `job_opening_id`)
 - `GET /api/v1/admin/candidates/{application_id}` (admin candidate details)
-- `PATCH /api/v1/admin/candidates/{application_id}/status` (admin updates applicant status)
+- `PATCH /api/v1/admin/candidates/{application_id}/status` (admin updates applicant status; manual `shortlisted` auto-queues research+scheduling, manual `rejected` sends rejection email)
 - `PATCH /api/v1/admin/candidates/{application_id}/review` (admin AI fields + override note)
 - `POST /api/v1/admin/candidates/{application_id}/evaluate` (enqueue async LLM evaluation job, returns accepted response)
 - `POST /api/v1/admin/candidates/{application_id}/evaluate/queue` (alias for queue submit)
@@ -150,6 +151,17 @@
   - emits issue flags (`experience_mismatch`, `missing_projects`, `skill_differences`)
   - calls Bedrock primary model first and fallback model on failure
   - persists compact structured JSON in `online_research_summary`
+  - API now exposes a typed computed field `research_summary` (validated object derived from `online_research_summary`)
+  - enforces confidence gate:
+    - if `manual_review_required=true` or confidence is `low`, candidate is routed to `sent_to_manager`
+    - scheduling queue endpoint blocks with `422` until explicit reviewer action
+  - emits research-quality telemetry counters in worker logs:
+    - `manual_review_required`
+    - `low_confidence`
+    - `high_severity_flags`
+    - `parse_failures`
+    - `fallback_model_usage`
+    - `heuristic_fallback_usage`
 - Prompt/config for phase 2 is split across:
   - `app/config/research_config.yaml` for runtime toggles (for example `research.enrichment.llm_analysis_enabled`)
   - `app/config/prompts.yaml` for `research.enrichment.llm_prompt_template`
@@ -221,6 +233,24 @@
 - Research enrichment queue endpoint is read from `.env` as `SQS_RESEARCH_QUEUE_URL`.
 - Interview scheduling queue runtime knobs are under `scheduling` in `app/config/scheduling_config.yaml`.
 - Interview scheduling queue endpoint is read from `.env` as `SQS_SCHEDULING_QUEUE_URL`.
+- Webhook/deferred-email queue runtime knobs are under `application.webhook_async` in `app/config/application_config.yaml`.
+- Webhook queue endpoint is `application.webhook_async.queue_url`.
+
+## Migrations (Alembic)
+- Runtime startup no longer performs PostgreSQL schema patching (`ALTER TABLE` / `CREATE INDEX`).
+- Use Alembic for schema evolution:
+  ```bash
+  alembic upgrade head
+  ```
+- Create a new migration revision:
+  ```bash
+  alembic revision -m "your_change_name"
+  ```
+- Current hardening migration adds:
+  - case-insensitive unique indexes for application email-per-opening and job role title
+  - status CHECK constraints on core lifecycle fields
+  - nullable-reference uniqueness hardening
+  - duplicate Slack-index cleanup
 
 ## Workers
 - Run API and workers as separate processes:
@@ -240,6 +270,9 @@
   venv/bin/python -m app.scripts.sqs_scheduling_worker
   ```
   ```bash
+  venv/bin/python -m app.scripts.sqs_webhook_event_worker
+  ```
+  ```bash
   venv/bin/python -m app.scripts.interview_hold_expiry_worker
   ```
 - Submission path is fast and non-blocking for parsing:
@@ -254,10 +287,18 @@
   1) Admin triggers research endpoint.
   2) API enqueues enrichment message to SQS.
   3) Research worker runs LinkedIn/GitHub extractors + cross-check + LLM synthesis and writes compact JSON to `online_research_summary`.
+  4) Candidate API response includes validated typed `research_summary` object for reliable frontend/backend consumers.
+  5) Research worker logs candidate-level and aggregate quality telemetry counters.
 - Interview scheduling path is async and queue-backed:
   1) Candidate is auto-shortlisted after evaluation threshold pass.
   2) Evaluation worker enqueues scheduling message to SQS.
   3) Scheduling worker fetches manager free/busy, creates 3-5 held 45-minute slots, and emails options to candidate.
+- Manual admin decision parity:
+  1) Admin sets candidate status to `shortlisted` via status endpoint.
+  2) Backend mirrors AI-pass side effects and enqueues research + scheduling jobs when queue/runtime guards allow.
+  3) Scheduling enqueue is blocked when research confidence gate is active (`manual_review_required=true` or `confidence=low`).
+  4) Admin sets candidate status to `rejected` via status endpoint.
+  5) Backend sends initial-screening style rejection email (notification-enabled environments).
 - Interview confirmation + expiry path:
   1) Candidate confirms one option via one-click token endpoint `POST /api/v1/applications/interview/confirm-token`.
   2) Legacy/manual endpoint is also available: `POST /api/v1/applications/{application_id}/interview/confirm` (email + option number).
@@ -268,6 +309,11 @@
   7) Recommended follow-up: add calendar attendee response sync (polling or Google push watch) to mirror accept/decline in DB.
   8) Expiry worker releases unconfirmed holds once `interview_hold_expires_at` passes (default 48h from option send; configurable).
   9) Same expiry worker also syncs Fireflies transcripts for `interview_booked` rows when `scheduling.fireflies.enabled=true`.
+- Webhook side-effect path (durable + idempotent):
+  1) Slack/Fireflies webhooks ACK quickly and enqueue a `webhook_event` SQS message.
+  2) `sqs_webhook_event_worker` claims idempotency key in `processed_webhook_events`.
+  3) Worker executes side effects (Slack onboarding, Fireflies transcript sync, deferred confirmation email).
+  4) Worker marks idempotency state complete/failed and acks message on success.
   10) On transcript sync success, candidate row stores:
      - `interview_transcript_url`
      - `interview_transcript_summary`
@@ -276,6 +322,10 @@
      - optional status transition `interview_schedule_status=interview_done` (configurable).
 - Parse-first strategy:
   - first stage extracts raw text from PDF/DOCX
+  - first-layer screening uses:
+    - min experience gate (`experience_range`)
+    - must-have requirement matching with token/phrase normalization
+    - optional max-years enforcement (`application.prefilter_enforce_max_years`, default `false`)
   - parse result stores compact structured fields only:
     - `skills`
     - `total_years_experience`
@@ -299,6 +349,8 @@
 6. Set `SQS_EVALUATION_QUEUE_URL` in `.env` to your LLM evaluation queue URL.
 7. Set `SQS_RESEARCH_QUEUE_URL` in `.env` to your research enrichment queue URL.
 8. Set `SQS_SCHEDULING_QUEUE_URL` in `.env` to your interview scheduling queue URL.
+9. Set webhook side-effect queue URL in `app/config/application_config.yaml`:
+   - `application.webhook_async.queue_url`
 9. Set AWS credentials in `.env` (for S3/SQS/Bedrock):
    - `AWS_ACCESS_KEY_ID`
    - `AWS_SECRET_ACCESS_KEY`
@@ -353,11 +405,15 @@
    ```bash
    venv/bin/python -m app.scripts.sqs_scheduling_worker
    ```
-21. Start hold-expiry worker:
+21. Start webhook-event worker:
+   ```bash
+   venv/bin/python -m app.scripts.sqs_webhook_event_worker
+   ```
+22. Start hold-expiry worker:
    ```bash
    venv/bin/python -m app.scripts.interview_hold_expiry_worker
    ```
-22. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
+23. Ensure your app host can reach the RDS endpoint on `5432` (same VPC, VPN, or SSH tunnel).
 
 ## Tests
 Run the test suite:

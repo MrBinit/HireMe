@@ -11,6 +11,8 @@ class ReferenceCreatePayload(BaseModel):
 
     application_id: UUID
     candidate_email: EmailStr
+    candidate_name: str | None = Field(default=None, min_length=2, max_length=120)
+    candidate_position: str | None = Field(default=None, min_length=2, max_length=160)
     referee_name: str = Field(min_length=2, max_length=120)
     referee_email: EmailStr | None = None
     referee_phone: str | None = Field(default=None, max_length=50)
@@ -21,12 +23,25 @@ class ReferenceCreatePayload(BaseModel):
     notes: str | None = Field(default=None, max_length=1000)
 
 
+class RefereeReferenceCreatePayload(BaseModel):
+    """Referee-facing payload with applicant and referee details."""
+
+    applicant_email: EmailStr
+    applicant_name: str = Field(min_length=2, max_length=120)
+    applicant_position: str = Field(min_length=2, max_length=160)
+    referee_name: str = Field(min_length=2, max_length=120)
+    referee_email: EmailStr
+    referee_note: str | None = Field(default=None, max_length=1000)
+
+
 class ReferenceRecord(BaseModel):
     """Stored representation of one reference."""
 
     id: UUID
     application_id: UUID
     candidate_email: EmailStr
+    candidate_name: str | None = None
+    candidate_position: str | None = None
     referee_name: str
     referee_email: EmailStr | None = None
     referee_phone: str | None = None
